@@ -4,6 +4,7 @@
 #include <uac/ac_processor.h>
 #include <uac/as_engine.h>
 #include <uac/desc_uac1.h>
+#include <uac/desc_uac2.h>
 #include <uac/urb_dispatcher.h>
 #include <uac/usbip_proto.h>
 #include <atomic>
@@ -13,19 +14,24 @@ namespace uac {
 
 // 一次成型的设备快照（Profile 加载或内置 preset 产出）
 struct DeviceSnapshot {
+    Protocol protocol = Protocol::Uac1;
     desc::DeviceDesc dev;
     std::vector<std::uint8_t> config;   // 已过 UDE 适配
+    std::vector<std::uint8_t> qualifier;
     std::map<std::uint8_t, std::vector<std::uint8_t>> strings;
     AcState ac;
     StreamConfig stream;
     std::vector<std::uint8_t> featureUnitIds;
+    std::uint8_t clockId = uac2::kClock; // UAC2 用
+    std::vector<std::uint32_t> rates{48000};
     bool hasSpeakerOut = true;  // EP 0x06
     bool hasMicIn = true;       // EP 0x86
     std::string name = "uac1-sim";
 };
 
-// 内置 preset：UAC1 C-Media 风格（黄金拓扑）
+// 内置 preset：UAC1 C-Media 风格（黄金拓扑）/ UAC2 全双工
 DeviceSnapshot make_uac1_default_snapshot();
+DeviceSnapshot make_uac2_default_snapshot();
 
 class DeviceModel final : public UrbDispatcher {
 public:

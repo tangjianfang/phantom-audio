@@ -17,11 +17,32 @@ DeviceSnapshot make_uac1_default_snapshot() {
     return s;
 }
 
+DeviceSnapshot make_uac2_default_snapshot() {
+    DeviceSnapshot s;
+    uac2::Uac2Profile p;
+    s.protocol = Protocol::Uac2;
+    s.dev = uac2::build_device_desc(p);
+    s.config = uac2::build_config_desc(p);
+    ude::adapt_config_for_ude(s.config);
+    s.qualifier = uac2::build_qualifier_desc(p);
+    s.strings = uac2::build_string_descs(p);
+    s.stream = StreamConfig{48000, 2, 4, 1000, 0}; // 32bit 槽
+    s.featureUnitIds = {uac2::kFuSpeaker, uac2::kFuMic};
+    s.clockId = uac2::kClock;
+    s.rates = p.rates;
+    s.name = "uac2-sim";
+    return s;
+}
+
 DeviceModel::DeviceModel(DeviceSnapshot snap, std::unique_ptr<MicroframeClock> clock)
     : snap_(std::move(snap)), clock_(clock ? std::move(clock) : std::make_unique<WallClock>()),
       ac_(snap_.ac, log_), engine_(*clock_, log_, snap_.stream) {
-    ac_.set_descriptors(desc::encode_device_desc(snap_.dev), snap_.config, snap_.strings);
+    ac_.set_descriptors(desc::encode_device_desc(snap_.dev), snap_.config, snap_.strings,
+                        snap_.qualifier);
     ac_.set_feature_unit_ids(snap_.featureUnitIds);
+    ac_.set_protocol(snap_.protocol);
+    ac_.set_rates(snap_.rates);
+    ac_.set_clock_id(snap_.clockId);
     // 注入 ManualClock 时关闭自动泵（测试手动 pump）；WallClock 用自动泵
     engine_.set_auto_pump(dynamic_cast<WallClock*>(clock_.get()) != nullptr);
 }
@@ -37,7 +58,9 @@ usbip::UsbIpDevice DeviceModel::usbip_device() const {
     d.idProduct = snap_.dev.idProduct;
     d.bcdDevice = snap_.dev.bcdDevice;
     d.bNumInterfaces = 3;
-    d.interfaces = {{0x01, 0x01, 0x00}, {0x01, 0x02, 0x00}, {0x01, 0x02, 0x00}};
+    const std::uint8_t proto =
+        snap_.protocol == Protocol::Uac2 ? std::uint8_t{0x20} : std::uint8_t{0x00};
+    d.interfaces = {{0x01, 0x01, proto}, {0x01, 0x02, proto}, {0x01, 0x02, proto}};
     return d;
 }
 

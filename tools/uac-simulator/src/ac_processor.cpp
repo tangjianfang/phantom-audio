@@ -31,10 +31,12 @@ AcProcessor::AcProcessor(AcState& state, LogStore& log) : st_(state), log_(log) 
 
 void AcProcessor::set_descriptors(std::vector<std::uint8_t> device,
                                   std::vector<std::uint8_t> config,
-                                  std::map<std::uint8_t, std::vector<std::uint8_t>> strings) {
+                                  std::map<std::uint8_t, std::vector<std::uint8_t>> strings,
+                                  std::vector<std::uint8_t> qualifier) {
     dev_ = std::move(device);
     cfg_ = std::move(config);
     strings_ = std::move(strings);
+    qualifier_ = std::move(qualifier);
 }
 
 void AcProcessor::log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
@@ -76,7 +78,11 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
                     trunc(it->second);
                     return false;
                 }
-                default: return true; // qualifier 等：bcdUSB1.1 不支持
+                case 0x06: // Device Qualifier（HS 设备必需，UAC2）
+                    if (qualifier_.empty()) return true;
+                    trunc(qualifier_);
+                    return false;
+                default: return true;
                 }
             }
             case kGetConfiguration: res.kind = ControlResult::Kind::Ok; res.data = {1}; return false;
@@ -91,6 +97,83 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
             case kGetInterface: res.kind = ControlResult::Kind::Ok; return false; // 状态由 DeviceModel 维护
             default: return true;
             }
+        }
+        if (type == 0x01 && recipient == 0x01 && proto_ == Protocol::Uac2) {
+            // UAC2：CUR=0x01 / RANGE=0x02；wIndex 高字节实体、wValue 高字节 CS
+            const std::uint8_t entity = wIndex >> 8;
+            const std::uint8_t cs = wValue >> 8;
+            const std::uint8_t cn = wValue & 0xff;
+            const bool isFu = std::find(fuIds_.begin(), fuIds_.end(), entity) != fuIds_.end();
+            const bool isClock = (entity == clockId_);
+            if (!isFu && !isClock) return true;
+            const std::size_t idx = cn == 0 ? 0 : cn - 1;
+            if (idx > 1) return true;
+            const bool isCur = bRequest == 0x01, isRange = bRequest == 0x02;
+            if (!isCur && !isRange) return true;
+            auto put32 = [&](std::uint32_t x) {
+                res.kind = ControlResult::Kind::Ok;
+                for (int i = 0; i < 4; ++i) res.data.push_back(static_cast<std::uint8_t>(x >> (8 * i)));
+            };
+            auto put16v = [&](std::int16_t x) {
+                res.kind = ControlResult::Kind::Ok;
+                res.data.push_back(static_cast<std::uint8_t>(x));
+                res.data.push_back(static_cast<std::uint8_t>(x >> 8));
+            };
+            if (isClock && cs == 0x01) { // CS_SAM_FREQ_CONTROL
+                if (isCur && (bmRequestType & 0x80) == 0) { // SET CUR（OUT 数据 4B LE）
+                    if (outData.size() < 4) return true;
+                    st_.sampleRate = static_cast<std::uint32_t>(outData[0]) |
+                                     (static_cast<std::uint32_t>(outData[1]) << 8) |
+                                     (static_cast<std::uint32_t>(outData[2]) << 16) |
+                                     (static_cast<std::uint32_t>(outData[3]) << 24);
+                    res.kind = ControlResult::Kind::Ok;
+                    return false;
+                }
+                if (isCur) { put32(st_.sampleRate); trunc(res.data); return false; }
+                // RANGE：numSubRanges(2) + {MIN,MAX,RES}×n（离散档 MIN=MAX, RES=0）
+                res.kind = ControlResult::Kind::Ok;
+                res.data.assign({static_cast<std::uint8_t>(rates_.size()),
+                                 static_cast<std::uint8_t>(rates_.size() >> 8)});
+                for (auto r : rates_) { // 逐子范围 {MIN,MAX,RES}（离散档 MIN=MAX, RES=0）
+                    for (int rep = 0; rep < 2; ++rep)
+                        for (int i = 0; i < 4; ++i) res.data.push_back(static_cast<std::uint8_t>(r >> (8 * i)));
+                    for (int i = 0; i < 4; ++i) res.data.push_back(0);
+                }
+                trunc(res.data);
+                return false;
+            }
+            if (isClock && cs == 0x02) { // CS_CLOCK_VALID_CONTROL：CUR 恒 1
+                if (isCur && (bmRequestType & 0x80) == 0) { res.kind = ControlResult::Kind::Ok; return false; }
+                if (isCur) { res.kind = ControlResult::Kind::Ok; res.data = {1}; return false; }
+                return true;
+            }
+            if (isFu && cs == 0x02) { // Volume
+                if (isCur && (bmRequestType & 0x80) == 0) {
+                    if (outData.size() < 2) return true;
+                    st_.volCur[idx] = rd_le16(outData);
+                    if (cn == 0) st_.volCur[1] = st_.volCur[0];
+                    res.kind = ControlResult::Kind::Ok;
+                    return false;
+                }
+                if (isCur) { put16v(st_.volCur[idx]); trunc(res.data); return false; }
+                res.kind = ControlResult::Kind::Ok;
+                res.data = {0x01, 0x00}; // 1 个子范围
+                put16v(st_.volMin); put16v(st_.volMax); put16v(st_.volRes);
+                trunc(res.data);
+                return false;
+            }
+            if (isFu && cs == 0x01) { // Mute
+                if (isCur && (bmRequestType & 0x80) == 0) {
+                    if (outData.empty()) return true;
+                    st_.mute[idx] = outData[0] != 0;
+                    if (cn == 0) st_.mute[1] = st_.mute[0];
+                    res.kind = ControlResult::Kind::Ok;
+                    return false;
+                }
+                if (isCur) { res.kind = ControlResult::Kind::Ok; res.data = {st_.mute[idx]}; return false; }
+                return true;
+            }
+            return true;
         }
         if (type == 0x01 && recipient == 0x01) { // class/interface → UAC1 音频控制
             const std::uint8_t entity = wIndex >> 8;

@@ -1,6 +1,10 @@
 // AC 处理器与日志测试
 #include <doctest/doctest.h>
 #include <uac/ac_processor.h>
+#include <uac/desc_uac2.h>
+#include <uac/device_model.h>
+#include <uac/as_engine.h>
+#include <memory>
 #include <uac/desc_uac1.h>
 #include <algorithm>
 #include <uac/usb_desc.h>
@@ -123,4 +127,104 @@ TEST_CASE("log store ring behavior") {
     CHECK(t[2] == "{\"i\":99}");
     ls.clear();
     CHECK(ls.count() == 0);
+}
+
+// ---------------- UAC2 协议分支（Task 11）----------------
+TEST_CASE("uac2 clock source CUR/RANGE negotiation") {
+    AcState st; LogStore log; AcProcessor ac(st, log);
+    uac2::Uac2Profile p;
+    ac.set_protocol(Protocol::Uac2);
+    ac.set_rates(p.rates);              // {44100, 48000, 96000}
+    ac.set_clock_id(uac2::kClock);
+    ac.set_feature_unit_ids({uac2::kFuSpeaker, uac2::kFuMic});
+    ac.set_descriptors(uac2::build_device_desc_encoded(p), uac2::build_config_desc(p),
+                       uac2::build_string_descs(p), uac2::build_qualifier_desc(p));
+
+    // RANGE：numSubRanges=3 + 3×{MIN,MAX,RES}
+    auto rg = ac.on_control(0xA1, 0x02 /*RANGE*/, 0x01 << 8, (uac2::kClock << 8) | 0, 38, {});
+    REQUIRE(rg.kind == ControlResult::Kind::Ok);
+    REQUIRE(rg.data.size() == 2 + 36);
+    CHECK(rg.data[0] == 3);
+    CHECK(rg.data[2] == 0x44); CHECK(rg.data[3] == 0xAC); CHECK(rg.data[4] == 0x00); // 44100
+    CHECK(rg.data[6] == 0x44); CHECK(rg.data[7] == 0xAC); // MAX1=MIN1（离散档）
+    CHECK(rg.data[14] == 0x80); CHECK(rg.data[15] == 0xBB); // 48000
+
+    // SET CUR 48000（OUT 数据 4B LE）
+    auto sc = ac.on_control(0x21, 0x01 /*CUR*/, 0x01 << 8, (uac2::kClock << 8) | 0, 4,
+                            std::vector<std::uint8_t>{0x80, 0xBB, 0x00, 0x00});
+    CHECK(sc.kind == ControlResult::Kind::Ok);
+    CHECK(st.sampleRate == 48000);
+    auto gc = ac.on_control(0xA1, 0x01, 0x01 << 8, (uac2::kClock << 8) | 0, 4, {});
+    REQUIRE(gc.kind == ControlResult::Kind::Ok);
+    CHECK(gc.data.size() == 4);
+    CHECK(gc.data[0] == 0x80); CHECK(gc.data[1] == 0xBB);
+
+    // Clock Valid CUR = 1
+    auto cv = ac.on_control(0xA1, 0x01, 0x02 << 8, (uac2::kClock << 8) | 0, 1, {});
+    REQUIRE(cv.kind == ControlResult::Kind::Ok);
+    CHECK(cv.data == std::vector<std::uint8_t>{1});
+}
+
+TEST_CASE("uac2 FU volume CUR + RANGE 2B") {
+    AcState st; LogStore log; AcProcessor ac(st, log);
+    uac2::Uac2Profile p;
+    ac.set_protocol(Protocol::Uac2);
+    ac.set_clock_id(uac2::kClock);
+    ac.set_feature_unit_ids({uac2::kFuSpeaker});
+    ac.set_descriptors({}, {}, {}, {});
+
+    auto sv = ac.on_control(0x21, 0x01, (0x02 << 8) | 1, (uac2::kFuSpeaker << 8) | 0, 2,
+                            std::vector<std::uint8_t>{0x00, 0xF6});
+    CHECK(sv.kind == ControlResult::Kind::Ok);
+    auto gv = ac.on_control(0xA1, 0x01, (0x02 << 8) | 1, (uac2::kFuSpeaker << 8) | 0, 2, {});
+    REQUIRE(gv.kind == ControlResult::Kind::Ok);
+    CHECK(gv.data.size() == 2);
+    CHECK(gv.data[1] == 0xF6);
+    auto vr = ac.on_control(0xA1, 0x02, (0x02 << 8) | 0, (uac2::kFuSpeaker << 8) | 0, 8, {});
+    REQUIRE(vr.kind == ControlResult::Kind::Ok);
+    CHECK(vr.data.size() == 8); // num(2)+MIN(2)+MAX(2)+RES(2)
+    CHECK(vr.data[0] == 1);
+    CHECK(vr.data[2] == 0x00); CHECK(vr.data[3] == 0xE8); // -6144
+}
+
+TEST_CASE("uac2 device qualifier via GET_DESCRIPTOR") {
+    AcState st; LogStore log; AcProcessor ac(st, log);
+    uac2::Uac2Profile p;
+    ac.set_descriptors({}, {}, {}, uac2::build_qualifier_desc(p));
+    auto q = ac.on_control(0x80, 0x06, 0x0600, 0, 10, {});
+    REQUIRE(q.kind == ControlResult::Kind::Ok);
+    CHECK(q.data.size() == 10);
+    CHECK(q.data[1] == 0x06);
+    // UAC1（无 qualifier）→ stall
+    AcState st2; LogStore log2; AcProcessor ac2(st2, log2);
+    auto q2 = ac2.on_control(0x80, 0x06, 0x0600, 0, 10, {});
+    CHECK(q2.kind == ControlResult::Kind::Stall);
+}
+
+TEST_CASE("uac2 snapshot wiring + 32-bit slot packing") {
+    auto s = make_uac2_default_snapshot();
+    CHECK(s.protocol == Protocol::Uac2);
+    CHECK(s.qualifier.size() == 10);
+    auto v = desc::parse_config(s.config);
+    REQUIRE(v.has_value());
+    CHECK(uac2::lint_uac2(*v, s.config).empty());
+    // 32bit 槽：1ms @48k 立体声 = 48×2×4=384B/包
+    auto clock = std::make_unique<ManualClock>();
+    DeviceModel m(std::move(s), std::move(clock));
+    auto* mc = dynamic_cast<ManualClock*>(&m.clock());
+    REQUIRE(mc != nullptr);
+    usbip::UrbCommand c{};
+    c.is_submit = true;
+    c.basic.command = usbip::CMD_SUBMIT;
+    c.basic.seqnum = 1;
+    c.basic.direction = usbip::DIR_IN;
+    c.basic.ep = 6;
+    c.submit.number_of_packets = 1;
+    int got = 0;
+    std::vector<unsigned char> payload;
+    m.engine().on_iso_in(c, [&](Completion&& cm) { payload = std::move(cm.payload); ++got; });
+    mc->advance_to(1000);
+    m.pump();
+    REQUIRE(got == 1);
+    CHECK(payload.size() == 384);
 }

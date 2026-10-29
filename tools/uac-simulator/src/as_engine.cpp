@@ -117,9 +117,10 @@ std::vector<unsigned char> AsEngine::fill_packets(std::uint16_t nPackets,
                 if (filePos_ < fileBuf_.size()) v = fileBuf_[filePos_++] / 32768.0;
                 else v = 0.0;
             }
-            const auto q = static_cast<std::int16_t>(std::lround(v * 32767.0));
-            out.push_back(static_cast<unsigned char>(q & 0xff));
-            out.push_back(static_cast<unsigned char>((q >> 8) & 0xff));
+            const auto q = static_cast<std::int32_t>(std::lround(v * 2147483647.0)) >>
+                           (8 * (4 - cfg_.bytesPerSample)); // 低 (bytesPerSample) 字节 LE
+            for (std::uint8_t b = 0; b < cfg_.bytesPerSample; ++b)
+                out.push_back(static_cast<unsigned char>((q >> (8 * b)) & 0xff));
         }
         usbip::IsoPacket ip;
         ip.offset = offset;

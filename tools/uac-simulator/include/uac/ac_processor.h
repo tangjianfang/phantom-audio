@@ -22,13 +22,19 @@ struct ControlResult {
     std::vector<std::uint8_t> data; // IN 方向响应数据（已截断至 wLength）
 };
 
+enum class Protocol : std::uint8_t { Uac1, Uac2 };
+
 class AcProcessor {
 public:
     AcProcessor(AcState& state, LogStore& log);
 
-    // 描述符注入（枚举用）
+    // 描述符注入（枚举用；qualifier 可选 —— UAC2 HS 设备必需）
     void set_descriptors(std::vector<std::uint8_t> device, std::vector<std::uint8_t> config,
-                         std::map<std::uint8_t, std::vector<std::uint8_t>> strings);
+                         std::map<std::uint8_t, std::vector<std::uint8_t>> strings,
+                         std::vector<std::uint8_t> qualifier = {});
+    void set_protocol(Protocol p) { proto_ = p; }
+    void set_rates(std::vector<std::uint32_t> rates) { rates_ = std::move(rates); }
+    void set_clock_id(std::uint8_t id) { clockId_ = id; }
 
     ControlResult on_control(std::uint8_t bmRequestType, std::uint8_t bRequest,
                              std::uint16_t wValue, std::uint16_t wIndex, std::uint16_t wLength,
@@ -43,9 +49,12 @@ private:
     AcState& st_;
     LogStore& log_;
     std::uint64_t requestCount_ = 0;
-    std::vector<std::uint8_t> dev_, cfg_;
+    std::vector<std::uint8_t> dev_, cfg_, qualifier_;
     std::map<std::uint8_t, std::vector<std::uint8_t>> strings_;
     std::vector<std::uint8_t> fuIds_;
+    Protocol proto_ = Protocol::Uac1;
+    std::vector<std::uint32_t> rates_{48000};
+    std::uint8_t clockId_ = 4;
 
     void log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
                  std::uint16_t wIndex, std::uint16_t wLength, const char* outcome, std::size_t n);
