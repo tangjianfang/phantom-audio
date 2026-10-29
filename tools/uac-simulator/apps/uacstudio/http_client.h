@@ -1,5 +1,8 @@
 // uacstudio 共用：极简 HTTP 客户端（127.0.0.1 控制 API）
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
