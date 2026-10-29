@@ -19,7 +19,7 @@
 - 提交信息格式：`<type>: <desc>` + 空行 + 详情，结尾 `Co-Authored-By: Claude Code <noreply@anthropic.com>`；type ∈ {feat,test,docs,build,chore,fix}。
 - 测试策略：核心库 100% 分支/行覆盖（doctest 单测，OpenCppCoverage 度量）；驱动/系统相关为"门控集成测试"（脚本检测 vhci 存在才跑）；每任务 TDD（先测后码）。
 - 需要用户提权执行的步骤统一收敛到 `scripts/elevated-*.ps1`，由用户以管理员 PowerShell 运行（`! powershell -File ...` 或右键管理员运行）。
-- 字节序约定：USB/IP 线上格式按**小端**实现，全部经 `tools/uac-simulator/include/uac/endian.h` 的读写助手集中处理；Task 9 M0 黄金抓包若证明为大端，仅改该文件一处。
+- 字节序约定（依据内核权威文档 Documentation/usb/usbip_protocol.rst 已核实）：**全协议大端（network byte order）**，含 URB 头（48B：basic 20B + cmd/ret 28B）；`OP_REQ_DEVLIST=0x8005/OP_REP_DEVLIST=0x0005/OP_REQ_IMPORT=0x8003/OP_REP_IMPORT=0x0003`；非 iso 的 `number_of_packets=0xffffffff`；iso_packet_descriptor 16B×n。经 `include/uac/endian.h` 的 `rd_be/wr_be` 集中处理。
 
 ---
 
@@ -140,8 +140,8 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 ```cpp
 TEST_CASE("wire sizes") {
-    CHECK(sizeof(BasicHeader) == 24); CHECK(sizeof(CmdSubmit) == 28);
-    CHECK(sizeof(RetSubmit) == 20);   CHECK(sizeof(usbip::kUrbHeaderSize) == 52);
+    CHECK(sizeof(BasicHeader) == 20); CHECK(sizeof(CmdSubmit) == 28);
+    CHECK(sizeof(RetSubmit) == 28);   CHECK(usbip::kUrbHeaderSize == 48); // 文档 0x30
 }
 TEST_CASE("devlist reply golden first bytes") {
     auto v = encode_devlist_reply({make_cmedia()});
