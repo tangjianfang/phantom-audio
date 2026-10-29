@@ -48,6 +48,7 @@ std::string SimHost::on_status() {
     j["version"] = kVersion;
     j["running"] = running_.load();
     j["profile"] = current_profile_;
+    j["instances"] = models_.size();
     j["listening"] = model_ != nullptr;      // usbip 端口在监听（可 attach）
     j["imported"] = server_.attached();       // vhci 已 IMPORT（真占用中）
     if (model_) {
@@ -88,15 +89,29 @@ std::string SimHost::on_attach(const std::string& profileName) {
         } else {
             return json{{"error", "profile not found: " + profileName}}.dump();
         }
-        server_.stop(); // 热切换：先断旧
-        model_ = std::make_unique<DeviceModel>(std::move(snap));
-        model_->engine().set_source_sine(1000.0, 0.5);
-        const auto dev = model_->usbip_device();
-        model_->set_disconnect_hook([this] { server_.kick(); });
-        if (!server_.start(3240, *model_, {dev}))
+        if (models_.size() >= 4)
+            return json{{"error", "实例已达上限 4（vhci 端口数）"}}.dump();
+        server_.stop(); // 重建清单：断开现有连接（vhci 侧表现为拔出再插入）
+        auto model = std::make_unique<DeviceModel>(std::move(snap));
+        model->engine().set_source_sine(1000.0, 0.5);
+        model->set_disconnect_hook([this] { server_.kick(); });
+        models_.emplace_back(profileName, std::move(model));
+        model_ = models_.back().second.get();
+        // 重建导出清单：每实例独立 busid/devnum
+        std::vector<usbip::UsbIpDevice> list;
+        for (std::size_t i = 0; i < models_.size(); ++i) {
+            auto d = models_[i].second->usbip_device();
+            d.busid = "1-" + std::to_string(i + 1);
+            d.devnum = static_cast<std::uint32_t>(i + 1);
+            d.path = "/uacsim/inst" + std::to_string(i);
+            list.push_back(d);
+        }
+        if (!server_.start(3240, *models_[0].second, list))
             return json{{"error", "usbip listen 3240 failed"}}.dump();
         current_profile_ = profileName;
-        return json{{"attached", profileName}, {"busid", dev.busid}}.dump();
+        return json{{"attached", profileName},
+                    {"busid", "1-" + std::to_string(models_.size())},
+                    {"instances", models_.size()}}.dump();
     } catch (const std::exception& e) {
         return json{{"error", e.what()}}.dump();
     }
@@ -105,7 +120,8 @@ std::string SimHost::on_attach(const std::string& profileName) {
 std::string SimHost::on_detach() {
     std::lock_guard lk(mtx_);
     server_.stop();
-    model_.reset();
+    models_.clear();
+    model_ = nullptr;
     current_profile_.clear();
     return json{{"ok", true}}.dump();
 }

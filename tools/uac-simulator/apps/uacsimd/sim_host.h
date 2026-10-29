@@ -6,6 +6,8 @@
 #include <uac/usbip_server.h>
 #include <filesystem>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 namespace uac {
 
@@ -26,12 +28,17 @@ public:
     std::string on_source(const std::string& body);
     std::string on_capture(const std::string& body);
 
-    DeviceModel* model() { return model_.get(); }
+    DeviceModel* model() { return model_; }
+    DeviceModel* model_at(std::size_t i) {
+        return i < models_.size() ? models_[i].second.get() : nullptr;
+    }
+    std::size_t instance_count() const { return models_.size(); }
 
 private:
     std::string profiles_dir_;
     mutable std::mutex mtx_;
-    std::unique_ptr<DeviceModel> model_;
+    DeviceModel* model_ = nullptr;                    // 指向 models_ 末实例（兼容单实例访问）
+    std::vector<std::pair<std::string, std::unique_ptr<DeviceModel>>> models_; // 多实例（busid → 模型）
     UsbIpServer server_;
     ControlApi api_;
     std::string current_profile_;
