@@ -53,12 +53,12 @@ DeviceSnapshot make_uac2_default_snapshot() {
 }
 
 DeviceModel::~DeviceModel() {
-    // Detach-join WITHOUT holding delayMtx_: a thread racing in handle_ep0's
-    // push path must be able to take the lock, finish, and be joined here;
-    // joining under the mutex would deadlock (or UB on the freed vector).
+    // Mark stopped under the mutex FIRST: any racer that acquires the lock
+    // afterwards completes inline instead of pushing into the dying vector.
     std::vector<std::thread> pending;
     {
         std::lock_guard lk(delayMtx_);
+        delayStopped_ = true;
         pending.swap(delayThreads_);
     }
     for (auto& t : pending)
@@ -208,8 +208,15 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
             d.payload = std::move(*payload);
             complete(std::move(d));
         });
-        std::lock_guard lk(delayMtx_);
-        delayThreads_.push_back(std::move(th));
+        bool pushed = false;
+        {
+            std::lock_guard lk(delayMtx_);
+            if (!delayStopped_) {
+                delayThreads_.push_back(std::move(th));
+                pushed = true;
+            }
+        }
+        if (!pushed) th.join(); // racing destruction: run the delay to completion here
         return;
     }
     complete(std::move(cm));

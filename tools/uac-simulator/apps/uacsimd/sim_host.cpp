@@ -11,6 +11,7 @@ using nlohmann::json;
 SimHost::SimHost(std::string profilesDir) : profiles_dir_(std::move(profilesDir)) {}
 
 bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {
+    usbipPort_ = usbipPort; // store BEFORE any listen can use the member
     ControlCallbacks cb;
     cb.status = [this] { return on_status(); };
     cb.log_tail = [this](std::size_t n) {
@@ -79,7 +80,8 @@ std::string SimHost::on_attach(const std::string& profileName) {
             if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
                 namespace fs = std::filesystem;
                 const fs::path exeDir = fs::path(exe).parent_path();
-                for (auto cand : {exeDir / "profiles", exeDir.parent_path() / "profiles",
+                for (auto cand : {exeDir / profiles_dir_, exeDir / "profiles",
+                                  exeDir.parent_path() / "profiles",
                                   exeDir.parent_path().parent_path() / "tools" /
                                       "uac-simulator" / "profiles"}) {
                     if (fs::exists(cand)) {
@@ -90,7 +92,8 @@ std::string SimHost::on_attach(const std::string& profileName) {
             }
         }
         // resolve profile file inside the (possibly relocated) dir
-        for (auto cand : {profileName + ".json", profileName}) {
+        for (auto cand : {profileName + ".json", profileName,
+                          "profiles/" + profileName + ".json"}) {
             if (fs::exists(fs::path(dir) / cand)) {
                 path = (fs::path(dir) / cand).string();
                 break;
@@ -117,6 +120,7 @@ std::string SimHost::on_attach(const std::string& profileName) {
         if (!logFile_.empty()) model->log().set_file_sink(logFile_); // per-model NDJSON sink
         models_.emplace_back(profileName, std::move(model));
         model_ = models_.back().second.get();
+        const auto instanceCount = models_.size();
         // 重建导出清单：每实例独立 busid/devnum，且与各自 dispatcher 配对，
         // 使 URB 按导入的 busid 路由到正确的设备模型（此前全部走 models_[0]）
         std::vector<UsbIpServer::Export> list;
@@ -127,12 +131,17 @@ std::string SimHost::on_attach(const std::string& profileName) {
             d.path = "/uacsim/inst" + std::to_string(i);
             list.emplace_back(std::move(d), models_[i].second.get());
         }
-        if (!server_.start(usbipPort_, list))
+        if (!server_.start(usbipPort_, list)) {
+            // roll back the phantom instance so /status stays truthful and
+            // retries do not burn the 4-instance quota
+            models_.pop_back();
+            model_ = models_.empty() ? nullptr : models_.back().second.get();
             return json{{"error", "usbip listen " + std::to_string(usbipPort_) + " failed"}}
                 .dump();
+        }
         current_profile_ = profileName;
         return json{{"attached", profileName},
-                    {"busid", "1-" + std::to_string(models_.size())},
+                    {"busid", "1-" + std::to_string(instanceCount)},
                     {"instances", models_.size()}}.dump();
     } catch (const std::exception& e) {
         return json{{"error", e.what()}}.dump();

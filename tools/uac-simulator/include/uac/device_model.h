@@ -91,6 +91,7 @@ private:
     std::uint32_t lastRate_ = 0;              // host-driven rate sync into the engine
     std::vector<std::thread> delayThreads_;   // fault-delay completions (joined in dtor)
     std::mutex delayMtx_;
+    bool delayStopped_ = false;               // set under delayMtx_ by the dtor
     FaultInjector fault_;
     std::function<void()> disconnectHook_;
     std::vector<std::uint8_t> hidQueue_; // 待发送报告（每项 2B：id+keys）

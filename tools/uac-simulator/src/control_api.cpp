@@ -50,6 +50,7 @@ std::string http_response(int code, const std::string& body) {
 
 struct ControlApi::Impl {
     std::atomic<bool> stopping{false};
+    std::atomic<SOCKET> serving{INVALID_SOCKET}; // connection being served right now
     std::atomic<SOCKET> listener{INVALID_SOCKET};
     std::thread acceptThread;
     ControlCallbacks cb;
@@ -211,6 +212,8 @@ void ControlApi::stop() {
     if (impl_->stopping.exchange(true)) return;
     SOCKET ls = impl_->listener.exchange(INVALID_SOCKET);
     if (ls != INVALID_SOCKET) { shutdown(ls, SD_BOTH); closesocket(ls); }
+    SOCKET sv = impl_->serving.exchange(INVALID_SOCKET);
+    if (sv != INVALID_SOCKET) { shutdown(sv, SD_BOTH); closesocket(sv); }
     if (impl_->acceptThread.joinable()) impl_->acceptThread.join();
 }
 

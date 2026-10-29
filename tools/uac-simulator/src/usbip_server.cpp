@@ -63,6 +63,7 @@ struct UsbIpServer::Impl {
     // exported devices with their owning dispatchers (busid -> pair)
     std::vector<std::pair<usbip::UsbIpDevice, UrbDispatcher*>> devices;
 
+    std::atomic<SOCKET> controlSock{INVALID_SOCKET}; // accept 线程正在服务的连接
     std::mutex devMtx; // busid → 通道（attached 即在表中）
     std::map<std::string, std::shared_ptr<Conn>> channels;
     std::vector<std::thread> channelThreads; // stop() 统一 join
@@ -110,6 +111,7 @@ struct UsbIpServer::Impl {
     // 控制连接（DEVLIST / IMPORT 握手）；IMPORT 成功则启动通道线程并返回
     void serve_control(SOCKET s) {
         using namespace usbip;
+        controlSock.store(s); // stop() 会 shutdown 它以打断阻塞 recv
         for (;;) {
             unsigned char common[8];
             if (!recv_all(s, common, sizeof(common))) break;
@@ -258,12 +260,16 @@ bool UsbIpServer::start(uint16_t port, const std::vector<Export>& exportable) {
 
 void UsbIpServer::stop() {
     if (impl_->stopping.exchange(true)) return;
-    // 顺序：唤醒所有通道读线程 → join 全部 → 关 listener
+    // 顺序：唤醒所有通道读线程与正在服务的控制连接 → join 全部 → 关 listener。
+    // 不 shutdown 控制连接的话，accept 线程可能阻塞在无超时的 recv 上，
+    // join 永不返回（attach/detach 每次都会走 stop，整进程随之卡死）。
     {
         std::lock_guard lk(impl_->devMtx);
         for (auto&& [busid, c] : impl_->channels)
             if (c->s != INVALID_SOCKET) { shutdown(c->s, SD_BOTH); closesocket(c->s); c->s = INVALID_SOCKET; }
     }
+    SOCKET cs = impl_->controlSock.exchange(INVALID_SOCKET);
+    if (cs != INVALID_SOCKET) { shutdown(cs, SD_BOTH); closesocket(cs); }
     if (impl_->acceptThread.joinable()) impl_->acceptThread.join();
     for (auto& t : impl_->channelThreads)
         if (t.joinable()) t.join();
