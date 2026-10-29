@@ -24,6 +24,7 @@ add_library(uac_core STATIC
   src/device_model.cpp
   src/desc_uac2.cpp
   src/event_injector.cpp
+  src/desc_hid.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -42,6 +43,7 @@ add_executable(uac_tests
   tests/test_device_model_loopback.cpp
   tests/test_desc_uac2.cpp
   tests/test_event_injector.cpp
+  tests/test_desc_hid.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)

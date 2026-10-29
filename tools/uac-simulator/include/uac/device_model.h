@@ -5,6 +5,7 @@
 #include <uac/as_engine.h>
 #include <uac/desc_uac1.h>
 #include <uac/desc_uac2.h>
+#include <uac/desc_hid.h>
 #include <uac/urb_dispatcher.h>
 #include <uac/event_injector.h>
 #include <uac/usbip_proto.h>
@@ -27,12 +28,15 @@ struct DeviceSnapshot {
     std::vector<std::uint32_t> rates{48000};
     bool hasSpeakerOut = true;  // EP 0x06
     bool hasMicIn = true;       // EP 0x86
+    bool hidConsumerVolume = false; // EP 0x82 + 报告描述符
+    std::vector<std::uint8_t> hidReportDesc;
     std::string name = "uac1-sim";
 };
 
 // 内置 preset：UAC1 C-Media 风格（黄金拓扑）/ UAC2 全双工
 DeviceSnapshot make_uac1_default_snapshot();
 DeviceSnapshot make_uac2_default_snapshot();
+DeviceSnapshot make_uac1_hid_snapshot(); // UAC1 + HID 音量键复合
 
 class DeviceModel final : public UrbDispatcher {
 public:
@@ -47,6 +51,10 @@ public:
     void on_unlink(std::uint32_t seqnum, std::uint32_t unlink_seqnum,
                    UnlinkResultFn done) override;
     void on_detach() override;
+
+    // R6 回退通道：HID 音量键（按住-释放语义）
+    void inject_hid_keys(std::uint8_t keys); // hid::kVolUp/kVolDown/kMute 位或；0=释放
+    bool has_hid() const { return snap_.hidConsumerVolume; }
 
     // R6 事件注入（先改状态再入队 Status Word）
     void inject_volume_step(int steps); // ±resDb 步进（正=音量+，负=音量-）
@@ -74,6 +82,10 @@ private:
     AsEngine engine_;
     std::map<std::uint8_t, std::uint8_t> ifaceAlt_;
     EventInjector injector_;
+    std::vector<std::uint8_t> hidQueue_; // 待发送报告（每项 2B：id+keys）
+    struct HeldHid { std::uint32_t seqnum; CompletionFn complete; };
+    std::vector<HeldHid> heldHid_;
+    void flush_held_hid();
     struct HeldInt { std::uint32_t seqnum; CompletionFn complete; };
     std::vector<HeldInt> heldInterrupts_;
     void flush_held_interrupts();

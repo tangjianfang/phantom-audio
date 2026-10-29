@@ -17,6 +17,21 @@ DeviceSnapshot make_uac1_default_snapshot() {
     return s;
 }
 
+DeviceSnapshot make_uac1_hid_snapshot() {
+    DeviceSnapshot s;
+    uac1::Uac1Profile p;
+    s.dev = uac1::build_device_desc(p);
+    s.config = hid::append_hid_interface(uac1::build_config_desc(p), 3);
+    ude::adapt_config_for_ude(s.config);
+    s.strings = uac1::build_string_descs(p);
+    s.stream = StreamConfig{};
+    s.featureUnitIds = {uac1::kFuSpeaker, uac1::kFuMic};
+    s.hidConsumerVolume = true;
+    s.hidReportDesc = hid::build_report_desc();
+    s.name = "uac1-hid-sim";
+    return s;
+}
+
 DeviceSnapshot make_uac2_default_snapshot() {
     DeviceSnapshot s;
     uac2::Uac2Profile p;
@@ -84,6 +99,21 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     const bool isOut = (setup[0] & 0x80) == 0;
     const std::span<const unsigned char> outData = isOut ? payload : std::span<const unsigned char>{};
 
+    // HID 报告描述符请求：GET_DESCRIPTOR(Report, wValue=0x22xx, wIndex=interface)
+    if (snap_.hidConsumerVolume && (setup[0] & 0x1f) == 0x01 && setup[1] == 0x06 &&
+        setup[3] == 0x22) {
+        Completion cm;
+        cm.ret.actual_length = static_cast<std::uint32_t>(snap_.hidReportDesc.size());
+        cm.payload = snap_.hidReportDesc;
+        const auto wLen = static_cast<std::uint16_t>(setup[6] | (setup[7] << 8));
+        if (cm.payload.size() > wLen) {
+            cm.payload.resize(wLen);
+            cm.ret.actual_length = wLen;
+        }
+        complete(std::move(cm));
+        return;
+    }
+
     // SET_INTERFACE / GET_INTERFACE 在此处理（维护 alt 状态）
     const std::uint8_t type = (setup[0] >> 5) & 0x03;
     const std::uint8_t recipient = setup[0] & 0x1f;
@@ -135,6 +165,19 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
     if (epAddr == 0x86) { // 麦克风 iso IN
         engine_.on_iso_in(cmd, std::move(complete));
+        return;
+    }
+    if (epAddr == 0x82 && snap_.hidConsumerVolume) { // HID 中断 IN：按键报告
+        if (!hidQueue_.empty()) {
+            Completion cm;
+            cm.ret.actual_length = 2;
+            cm.payload = {hidQueue_.front(), hidQueue_[1]};
+            hidQueue_.erase(hidQueue_.begin(), hidQueue_.begin() + 2);
+            complete(std::move(cm));
+        } else {
+            std::lock_guard lk(mtx_);
+            heldHid_.push_back({cmd.basic.seqnum, std::move(complete)});
+        }
         return;
     }
     if (epAddr == 0x81) { // AC 中断 IN（Status Word）：有挂起通知立即回，否则挂起
@@ -210,6 +253,44 @@ void DeviceModel::inject_mute_toggle() {
     flush_held_interrupts();
     log_.append(std::string("{\"event\":\"inject_mute\",\"mute\":") +
                 std::to_string(snap_.ac.mute[0] ? 1 : 0) + "}");
+}
+
+void DeviceModel::inject_hid_keys(std::uint8_t keys) {
+    {
+        std::lock_guard lk(mtx_);
+        hidQueue_.push_back(0x01);
+        hidQueue_.push_back(keys);
+    }
+    flush_held_hid();
+    log_.append(std::string("{\"event\":\"inject_hid\",\"keys\":") + std::to_string(keys) + "}");
+}
+
+void DeviceModel::flush_held_hid() {
+    std::vector<HeldHid> toFire;
+    {
+        std::lock_guard lk(mtx_);
+        toFire = std::move(heldHid_);
+        heldHid_.clear();
+    }
+    for (auto& h : toFire) {
+        std::vector<std::uint8_t> rep;
+        {
+            std::lock_guard lk(mtx_);
+            if (hidQueue_.size() >= 2) {
+                rep = {hidQueue_.front(), hidQueue_[1]};
+                hidQueue_.erase(hidQueue_.begin(), hidQueue_.begin() + 2);
+            }
+        }
+        if (rep.empty()) { // 无报告：重新挂起
+            std::lock_guard lk(mtx_);
+            heldHid_.push_back(std::move(h));
+            continue;
+        }
+        Completion cm;
+        cm.ret.actual_length = 2;
+        cm.payload = std::move(rep);
+        h.complete(std::move(cm));
+    }
 }
 
 void DeviceModel::flush_held_interrupts() {
