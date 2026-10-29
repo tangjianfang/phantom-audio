@@ -29,6 +29,7 @@ add_library(uac_core STATIC
   src/control_api.cpp
   src/fault_injector.cpp
   src/goertzel.cpp
+  src/msos20.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -52,6 +53,7 @@ add_executable(uac_tests
   tests/test_control_api.cpp
   tests/test_fault_injector.cpp
   tests/test_goertzel.cpp
+  tests/test_msos20.cpp
   tests/test_coverage_gaps.cpp
   tests/test_coverage_gaps2.cpp
   tests/test_coverage_gaps3.cpp
