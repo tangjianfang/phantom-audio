@@ -33,6 +33,7 @@ inline constexpr std::uint8_t kItMic = 4, kFuMic = 5, kOtMic = 6;
 inline constexpr std::uint8_t kInterfaceAC = 0, kInterfaceSpk = 1, kInterfaceMic = 2;
 
 desc::DeviceDesc build_device_desc(const Uac1Profile& p);
+std::vector<std::uint8_t> build_device_desc_encoded(const Uac1Profile& p); // 18B 线上格式
 std::vector<std::uint8_t> build_config_desc(const Uac1Profile& p); // 已含 UDE 无关的原始 FS 语义
 std::map<std::uint8_t, std::vector<std::uint8_t>> build_string_descs(const Uac1Profile& p);
 std::uint16_t max_packet_size(const Uac1Profile& p); // 最大采样率 × 声道 × 2B

@@ -17,6 +17,8 @@ add_library(uac_core STATIC
   src/usb_desc.cpp
   src/desc_uac1.cpp
   src/ude_adapter.cpp
+  src/log_store.cpp
+  src/ac_processor.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -30,6 +32,7 @@ add_executable(uac_tests
   tests/test_usbip_server.cpp
   tests/test_usb_desc.cpp
   tests/test_desc_uac1.cpp
+  tests/test_ac_processor.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)

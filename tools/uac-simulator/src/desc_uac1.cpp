@@ -80,6 +80,10 @@ desc::DeviceDesc build_device_desc(const Uac1Profile& p) {
     return d;
 }
 
+std::vector<uint8_t> build_device_desc_encoded(const Uac1Profile& p) {
+    return desc::encode_device_desc(build_device_desc(p));
+}
+
 std::map<uint8_t, std::vector<uint8_t>> build_string_descs(const Uac1Profile& p) {
     std::map<uint8_t, std::vector<uint8_t>> m;
     m[1] = desc::string_desc(p.manufacturer);
