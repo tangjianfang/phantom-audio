@@ -1,0 +1,23 @@
+# build
+build/
+out/
+dist/
+*.obj
+*.exe
+*.pdb
+*.lib
+
+# ide
+.vs/
+.vscode/
+.idea/
+
+# test/coverage
+coverage/
+*.gcov
+Testing/
+
+# artifacts
+*.etl
+*.wav
+logs/
