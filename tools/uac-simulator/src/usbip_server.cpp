@@ -239,13 +239,15 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
 
 void UsbIpServer::stop() {
     if (impl_->stopping.exchange(true)) return;
-    // 先等线程退出（select 100ms 超时轮询会看到 stopping），再关套接字——
-    // 并发 select 中的 closesocket 在 Windows 上不保证立即释放端口（10048）
+    // 顺序关键：① shutdown 数据套接字唤醒阻塞中的 urb_loop/recv（线程因此可退出）
+    //           ② join 线程（accept 线程 100ms select 轮询会看到 stopping）
+    //           ③ 线程退出后再关 listener —— 并发 select 中的 closesocket 在 Windows
+    //              上不保证立即释放端口（此前热切换 10048 的根因）
+    SOCKET ds = impl_->data_sock.exchange(INVALID_SOCKET);
+    if (ds != INVALID_SOCKET) { shutdown(ds, SD_BOTH); closesocket(ds); }
     if (impl_->accept_thread.joinable()) impl_->accept_thread.join();
     SOCKET ls = impl_->listener.exchange(INVALID_SOCKET);
     if (ls != INVALID_SOCKET) { shutdown(ls, SD_BOTH); closesocket(ls); }
-    SOCKET ds = impl_->data_sock.exchange(INVALID_SOCKET);
-    if (ds != INVALID_SOCKET) { shutdown(ds, SD_BOTH); closesocket(ds); } // shutdown 唤醒阻塞 recv
     impl_->attached.store(false);
 }
 
