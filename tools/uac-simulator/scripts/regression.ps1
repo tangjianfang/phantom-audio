@@ -1,4 +1,4 @@
-# regression.ps1 —— 三层回归
+﻿# regression.ps1 —— 三层回归
 #   L1 单测 + L2 场景（ctest，全自动）
 #   L3 实机（-WithDriver：需 usbip-win2 驱动 + 管理员装好的环境；普通权限可跑）
 # 产出：build/regression-report.txt

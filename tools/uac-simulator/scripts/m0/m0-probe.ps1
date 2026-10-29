@@ -1,4 +1,4 @@
-# m0-probe.ps1 —— M0 探针执行（普通权限）
+﻿# m0-probe.ps1 —— M0 探针执行（普通权限）
 # 前置：elevated-m0-vm.ps1 已建 VM 并完成安装；usbip-win2 驱动已装（elevated-install-driver.ps1）
 # 产出：docs/m0-report.md 素材（控制台输出 + m0.pcap 黄金抓包）
 param(

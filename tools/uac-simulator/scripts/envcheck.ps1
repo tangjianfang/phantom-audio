@@ -1,4 +1,4 @@
-# envcheck.ps1 — 只读环境体检（非管理员可运行）
+﻿# envcheck.ps1 — 只读环境体检（非管理员可运行）
 # 输出构建工具链 / 虚拟化 / 驱动 / 磁盘状态，供 M0 前置判断。
 $ErrorActionPreference = 'Continue'
 

@@ -1,4 +1,4 @@
-# elevated-install-driver.ps1 —— 安装 usbip-win2 v0.9.7.8（需管理员）
+﻿# elevated-install-driver.ps1 —— 安装 usbip-win2 v0.9.7.8（需管理员）
 # 步骤：还原点 → 静默安装 → 验证服务。注意：安装会短暂重启所有 USB3 集线器。
 param(
     [string]$InstallerDir = "$PSScriptRoot\..\third_party\usbip-win2"

@@ -1,4 +1,4 @@
-# elevated-m0-vm.ps1 —— M0 探针 VM 一键创建（需管理员 PowerShell）
+﻿# elevated-m0-vm.ps1 —— M0 探针 VM 一键创建（需管理员 PowerShell）
 # 产出：Internal 交换机 UAC-M0 + NAT 192.168.77.0/24 + Gen2 VM uac-m0（Ubuntu 24.04 自动安装）
 # 之后运行 scripts/m0/m0-probe.ps1（普通权限）执行探针。
 param(

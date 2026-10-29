@@ -1,4 +1,4 @@
-# make-seed-iso.ps1 —— 用系统自带 IMAPI2 生成 NoCloud seed ISO（卷标 CIDATA）
+﻿# make-seed-iso.ps1 —— 用系统自带 IMAPI2 生成 NoCloud seed ISO（卷标 CIDATA）
 # 注意：COM 互操作需要 Windows PowerShell 5.1（powershell.exe），不要用 pwsh 7 调用。
 param(
     [Parameter(Mandatory)] [string]$UserDataPath,
