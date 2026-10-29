@@ -68,3 +68,7 @@ target_link_libraries(uacsim PRIVATE ws2_32)
 
 add_executable(host_probe apps/host_probe/main.cpp)
 target_link_libraries(host_probe PRIVATE uac_core ole32)
+
+add_executable(uacstudio WIN32 apps/uacstudio/main.cpp)
+target_link_libraries(uacstudio PRIVATE ws2_32 comctl32)
+set_target_properties(uacstudio PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup")
