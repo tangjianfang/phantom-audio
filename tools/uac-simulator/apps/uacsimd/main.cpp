@@ -1,43 +1,43 @@
-// uacsimd —— UAC 设备仿真器服务（M1 版：内置 uac1-cmedia-sim preset）
-// 用法：uacsimd.exe [--port 3240] [--log-file <path>] [--preset uac1-cmedia-sim]
-#include <uac/device_model.h>
-#include <uac/usbip_server.h>
+// uacsimd —— UAC 设备仿真器服务
+// 用法：uacsimd.exe [--usbip-port 3240] [--http-port 3241] [--profiles <dir>]
+//                  [--profile <name|path>（启动即 attach）] [--log-file <path>]
+#include "sim_host.h"
 #include <uac/version.h>
-#include <atomic>
-#include <thread>
 #include <csignal>
 #include <cstdio>
-#include <string>
 
 static std::atomic<bool> g_run{true};
 static void on_sigint(int) { g_run.store(false); }
 
 int main(int argc, char** argv) {
-    std::uint16_t port = 3240;
-    std::string logFile, preset = "uac1-cmedia-sim";
+    std::uint16_t usbipPort = 3240, httpPort = 3241;
+    std::string profilesDir = "profiles", logFile, initialProfile;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--port" && i + 1 < argc) port = static_cast<std::uint16_t>(atoi(argv[++i]));
-        else if (a == "--log-file" && i + 1 < argc) logFile = argv[++i];
-        else if (a == "--preset" && i + 1 < argc) preset = argv[++i];
+        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+        if (a == "--usbip-port") usbipPort = static_cast<std::uint16_t>(atoi(next().c_str()));
+        else if (a == "--http-port") httpPort = static_cast<std::uint16_t>(atoi(next().c_str()));
+        else if (a == "--profiles") profilesDir = next();
+        else if (a == "--profile") initialProfile = next();
+        else if (a == "--log-file") logFile = next();
     }
 
-    auto model = std::make_unique<uac::DeviceModel>(uac::make_uac1_default_snapshot());
-    if (!logFile.empty()) model->log().set_file_sink(logFile);
-    model->engine().set_source_sine(1000.0, 0.5); // IN 默认 1kHz 正弦
-
-    uac::UsbIpServer srv;
-    if (!srv.start(port, *model, {model->usbip_device()})) {
-        fprintf(stderr, "uacsimd: cannot listen on 127.0.0.1:%u\n", port);
+    uac::SimHost host(profilesDir);
+    if (!host.start(usbipPort, httpPort)) {
+        fprintf(stderr, "uacsimd: control api listen %u failed\n", httpPort);
         return 1;
     }
+    if (!logFile.empty() && host.model()) host.model()->log().set_file_sink(logFile);
+    if (!initialProfile.empty()) {
+        const auto r = host.on_attach(initialProfile);
+        printf("attach(%s) -> %s\n", initialProfile.c_str(), r.c_str());
+    }
     std::signal(SIGINT, on_sigint);
-    printf("uacsimd %s listening 127.0.0.1:%u (busid %s, vid=%04x pid=%04x)\n", uac::kVersion,
-           srv.port(), model->usbip_device().busid.c_str(), model->usbip_device().idVendor,
-           model->usbip_device().idProduct);
-    printf("press Ctrl+C to stop\n");
+    printf("uacsimd %s | usbip 127.0.0.1:%u | control 127.0.0.1:%u | profiles: %s\n",
+           uac::kVersion, usbipPort, httpPort, profilesDir.c_str());
+    printf("Ctrl+C 停止；uacsim.exe 是命令行客户端\n");
     while (g_run.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    srv.stop();
+    host.stop();
     printf("uacsimd: stopped\n");
     return 0;
 }

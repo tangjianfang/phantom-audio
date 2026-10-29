@@ -1,0 +1,168 @@
+// SimHost 实现
+#include "sim_host.h"
+#include <uac/version.h>
+#include <nlohmann/json.hpp>
+
+namespace uac {
+
+using nlohmann::json;
+
+SimHost::SimHost(std::string profilesDir) : profiles_dir_(std::move(profilesDir)) {}
+
+bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {
+    ControlCallbacks cb;
+    cb.status = [this] { return on_status(); };
+    cb.log_tail = [this](std::size_t n) {
+        std::lock_guard lk(mtx_);
+        if (!model_) return std::string("[]");
+        json arr = json::array();
+        for (auto& l : model_->log().tail(n)) arr.push_back(l);
+        return arr.dump();
+    };
+    cb.clear_log = [this] {
+        std::lock_guard lk(mtx_);
+        if (model_) model_->log().clear();
+    };
+    cb.attach = [this](const std::string& p) { return on_attach(p); };
+    cb.detach = [this] { return on_detach(); };
+    cb.event = [this](const std::string& e) { return on_event(e); };
+    cb.inject = [this](const std::string& b) { return on_inject(b); };
+    cb.source = [this](const std::string& b) { return on_source(b); };
+    cb.capture = [this](const std::string& b) { return on_capture(b); };
+
+    if (!api_.start(httpPort, std::move(cb))) return false;
+    running_.store(true);
+    (void)usbipPort; // UsbIpServer 端口在 attach 时使用（保持 3240 默认）
+    return true;
+}
+
+void SimHost::stop() {
+    running_.store(false);
+    on_detach();
+    api_.stop();
+}
+
+std::string SimHost::on_status() {
+    std::lock_guard lk(mtx_);
+    json j;
+    j["version"] = kVersion;
+    j["running"] = running_.load();
+    j["profile"] = current_profile_;
+    j["listening"] = model_ != nullptr;      // usbip 端口在监听（可 attach）
+    j["imported"] = server_.attached();       // vhci 已 IMPORT（真占用中）
+    if (model_) {
+        auto ac = model_->ac_state();
+        j["volCurDb"] = ac.volCur[0] / 256.0;
+        j["mute"] = ac.mute[0];
+        j["sampleRate"] = ac.sampleRate;
+        j["logCount"] = model_->log().count();
+        auto st = model_->engine().stats();
+        j["inBytes"] = st.inBytes;
+        j["outBytes"] = st.outBytes;
+        j["interfaceAlt"] = json::object();
+    }
+    return j.dump();
+}
+
+std::string SimHost::on_attach(const std::string& profileName) {
+    std::lock_guard lk(mtx_);
+    try {
+        namespace fs = std::filesystem;
+        // profile 名可带 .json 也可不带；也可为内置名
+        std::string path;
+        for (auto cand : {profileName + ".json", profileName, "profiles/" + profileName + ".json"}) {
+            if (fs::exists(fs::path(profiles_dir_) / cand)) {
+                path = (fs::path(profiles_dir_) / cand).string();
+                break;
+            }
+        }
+        DeviceSnapshot snap;
+        if (!path.empty()) {
+            snap = build_snapshot(load_profile(path));
+        } else if (profileName == "uac1-cmedia-sim") {
+            snap = make_uac1_default_snapshot();
+        } else if (profileName == "uac1-hid-sim") {
+            snap = make_uac1_hid_snapshot();
+        } else if (profileName == "uac2-sim") {
+            snap = make_uac2_default_snapshot();
+        } else {
+            return json{{"error", "profile not found: " + profileName}}.dump();
+        }
+        server_.stop(); // 热切换：先断旧
+        model_ = std::make_unique<DeviceModel>(std::move(snap));
+        model_->engine().set_source_sine(1000.0, 0.5);
+        const auto dev = model_->usbip_device();
+        if (!server_.start(3240, *model_, {dev}))
+            return json{{"error", "usbip listen 3240 failed"}}.dump();
+        current_profile_ = profileName;
+        return json{{"attached", profileName}, {"busid", dev.busid}}.dump();
+    } catch (const std::exception& e) {
+        return json{{"error", e.what()}}.dump();
+    }
+}
+
+std::string SimHost::on_detach() {
+    std::lock_guard lk(mtx_);
+    server_.stop();
+    model_.reset();
+    current_profile_.clear();
+    return json{{"ok", true}}.dump();
+}
+
+std::string SimHost::on_event(const std::string& type) {
+    std::lock_guard lk(mtx_);
+    if (!model_) return json{{"error", "not attached"}}.dump();
+    if (type == "volume_up") model_->inject_volume_step(1);
+    else if (type == "volume_down") model_->inject_volume_step(-1);
+    else if (type == "mute") model_->inject_mute_toggle();
+    else if (type == "hid_vol_up") model_->inject_hid_keys(hid::kVolUp);
+    else if (type == "hid_vol_down") model_->inject_hid_keys(hid::kVolDown);
+    else if (type == "hid_mute") model_->inject_hid_keys(hid::kMute);
+    else if (type == "hid_release") model_->inject_hid_keys(0);
+    else return json{{"error", "unknown event: " + type}}.dump();
+    return json{{"ok", true}, {"event", type}}.dump();
+}
+
+std::string SimHost::on_inject(const std::string& body) {
+    std::lock_guard lk(mtx_);
+    // Task 17 FaultInjector 接入点；当前仅确认模型在线
+    if (!model_) return json{{"error", "not attached"}}.dump();
+    (void)body;
+    return json{{"error", "inject 未实现（Task 17）"}}.dump();
+}
+
+std::string SimHost::on_source(const std::string& body) {
+    std::lock_guard lk(mtx_);
+    if (!model_) return json{{"error", "not attached"}}.dump();
+    try {
+        const auto j = json::parse(body.empty() ? "{}" : body);
+        const auto kind = j.value("kind", std::string("sine"));
+        if (kind == "sine") {
+            model_->engine().set_source_sine(j.value("hz", 1000.0), j.value("amp", 0.5));
+        } else if (kind == "silence") {
+            model_->engine().set_source_silence();
+        } else if (kind == "file") {
+            model_->engine().set_source_file(j.value("file", std::string()));
+        } else {
+            return json{{"error", "unknown kind"}}.dump();
+        }
+        return json{{"ok", true}, {"kind", kind}}.dump();
+    } catch (const std::exception& e) {
+        return json{{"error", e.what()}}.dump();
+    }
+}
+
+std::string SimHost::on_capture(const std::string& body) {
+    std::lock_guard lk(mtx_);
+    if (!model_) return json{{"error", "not attached"}}.dump();
+    try {
+        const auto j = json::parse(body.empty() ? "{}" : body);
+        const auto path = j.value("path", std::string());
+        model_->engine().set_capture_sink(path); // 空路径=关闭落盘
+        return json{{"ok", true}, {"path", path}}.dump();
+    } catch (const std::exception& e) {
+        return json{{"error", e.what()}}.dump();
+    }
+}
+
+} // namespace uac

@@ -205,6 +205,7 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
     a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(0x7f000001); // 仅回环
     if (bind(ls, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == SOCKET_ERROR) {
+        fprintf(stderr, "bind(%u) wsaerr=%d\n", port, WSAGetLastError());
         closesocket(ls);
         return false;
     }
@@ -213,6 +214,7 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
         return false;
     }
     impl_->listener.store(ls);
+    impl_->stopping.store(false); // 支持复用（stop→start 循环）
 
     impl_->accept_thread = std::thread([this] {
         // Windows 上 closesocket 无法解除阻塞中的 accept()，用 select+短超时轮询退出标志
@@ -237,11 +239,13 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
 
 void UsbIpServer::stop() {
     if (impl_->stopping.exchange(true)) return;
+    // 先等线程退出（select 100ms 超时轮询会看到 stopping），再关套接字——
+    // 并发 select 中的 closesocket 在 Windows 上不保证立即释放端口（10048）
+    if (impl_->accept_thread.joinable()) impl_->accept_thread.join();
     SOCKET ls = impl_->listener.exchange(INVALID_SOCKET);
     if (ls != INVALID_SOCKET) { shutdown(ls, SD_BOTH); closesocket(ls); }
     SOCKET ds = impl_->data_sock.exchange(INVALID_SOCKET);
     if (ds != INVALID_SOCKET) { shutdown(ds, SD_BOTH); closesocket(ds); } // shutdown 唤醒阻塞 recv
-    if (impl_->accept_thread.joinable()) impl_->accept_thread.join();
     impl_->attached.store(false);
 }
 

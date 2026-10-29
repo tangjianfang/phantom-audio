@@ -26,6 +26,7 @@ add_library(uac_core STATIC
   src/event_injector.cpp
   src/desc_hid.cpp
   src/profile.cpp
+  src/control_api.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -46,10 +47,17 @@ add_executable(uac_tests
   tests/test_event_injector.cpp
   tests/test_desc_hid.cpp
   tests/test_profile.cpp
+  tests/test_control_api.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)
 
 # ---------------- 应用 ----------------
-add_executable(uacsimd apps/uacsimd/main.cpp)
+add_executable(uacsimd
+  apps/uacsimd/main.cpp
+  apps/uacsimd/sim_host.cpp
+)
 target_link_libraries(uacsimd PRIVATE uac_core ws2_32)
+
+add_executable(uacsim apps/uacsim/main.cpp)
+target_link_libraries(uacsim PRIVATE ws2_32)
