@@ -251,6 +251,11 @@ void UsbIpServer::stop() {
     impl_->attached.store(false);
 }
 
+void UsbIpServer::kick() {
+    SOCKET ds = impl_->data_sock.exchange(INVALID_SOCKET);
+    if (ds != INVALID_SOCKET) { shutdown(ds, SD_BOTH); closesocket(ds); }
+}
+
 bool UsbIpServer::attached() const { return impl_->attached.load(); }
 uint16_t UsbIpServer::port() const {
     SOCKET ls = impl_->listener.load();

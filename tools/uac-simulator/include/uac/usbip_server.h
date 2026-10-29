@@ -21,6 +21,7 @@ public:
     void stop();
 
     bool attached() const;    // IMPORT 生效中（URB 通道占用）
+    void kick();             // 主动断开当前 IMPORT 连接（故障注入"拔线"，触发 on_detach）
     std::uint16_t port() const;
 
 private:

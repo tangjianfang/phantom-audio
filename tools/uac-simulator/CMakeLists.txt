@@ -27,6 +27,7 @@ add_library(uac_core STATIC
   src/desc_hid.cpp
   src/profile.cpp
   src/control_api.cpp
+  src/fault_injector.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -48,6 +49,7 @@ add_executable(uac_tests
   tests/test_desc_hid.cpp
   tests/test_profile.cpp
   tests/test_control_api.cpp
+  tests/test_fault_injector.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)

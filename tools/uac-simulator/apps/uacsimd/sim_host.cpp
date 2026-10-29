@@ -92,6 +92,7 @@ std::string SimHost::on_attach(const std::string& profileName) {
         model_ = std::make_unique<DeviceModel>(std::move(snap));
         model_->engine().set_source_sine(1000.0, 0.5);
         const auto dev = model_->usbip_device();
+        model_->set_disconnect_hook([this] { server_.kick(); });
         if (!server_.start(3240, *model_, {dev}))
             return json{{"error", "usbip listen 3240 failed"}}.dump();
         current_profile_ = profileName;
@@ -125,10 +126,45 @@ std::string SimHost::on_event(const std::string& type) {
 
 std::string SimHost::on_inject(const std::string& body) {
     std::lock_guard lk(mtx_);
-    // Task 17 FaultInjector 接入点；当前仅确认模型在线
     if (!model_) return json{{"error", "not attached"}}.dump();
-    (void)body;
-    return json{{"error", "inject 未实现（Task 17）"}}.dump();
+    try {
+        const auto j = json::parse(body.empty() ? "{}" : body);
+        const auto kind = j.value("kind", std::string());
+        FaultRule r;
+        if (kind == "stall") {
+            r.kind = FaultRule::Kind::StallNth;
+            r.bRequest = j.value("bRequest", -1);
+            r.bmRequestType = j.value("bmRequestType", -1);
+            r.nth = j.value("nth", 1);
+        } else if (kind == "delay_ms") {
+            r.kind = FaultRule::Kind::DelayMs;
+            r.bRequest = j.value("bRequest", -1);
+            r.ms = j.value("ms", 100);
+        } else if (kind == "corrupt_desc_at") {
+            r.kind = FaultRule::Kind::CorruptDescByteAt;
+            r.byteOffset = j.value("byteOffset", 100);
+            r.xorByte = j.value<unsigned char>("xor", 0xFF);
+        } else if (kind == "half_enumerate") {
+            r.kind = FaultRule::Kind::HalfEnumerate;
+            r.stopAtStep = j.value("stopAtStep", 2);
+        } else if (kind == "disconnect") {
+            r.kind = FaultRule::Kind::Disconnect;
+            r.ms = j.value("afterMs", 0);
+        } else if (kind == "iso_error") {
+            r.kind = FaultRule::Kind::IsoError;
+            r.everyN = j.value("everyN", 2);
+            r.errCount = j.value("errCount", 1);
+        } else if (kind == "clear") {
+            model_->faults().clear();
+            return json{{"ok", true}, {"kind", "clear"}}.dump();
+        } else {
+            return json{{"error", "unknown kind: " + kind}}.dump();
+        }
+        model_->faults().arm(r);
+        return json{{"ok", true}, {"kind", kind}}.dump();
+    } catch (const std::exception& e) {
+        return json{{"error", e.what()}}.dump();
+    }
 }
 
 std::string SimHost::on_source(const std::string& body) {

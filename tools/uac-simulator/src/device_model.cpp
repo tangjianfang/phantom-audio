@@ -1,5 +1,8 @@
 // DeviceModel 实现
 #include <uac/device_model.h>
+#include <chrono>
+#include <memory>
+#include <thread>
 #include <uac/ude_adapter.h>
 
 namespace uac {
@@ -141,16 +144,50 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
         return;
     }
 
+    fault_.on_ep0_request();
+    if (fault_.should_disconnect()) {
+        log_.append("{\"event\":\"fault_disconnect\"}");
+        if (disconnectHook_) disconnectHook_();
+        Completion cm; // 静默 STALL：连接已被 kick
+        cm.ret.status = -19; // -ENODEV
+        complete(std::move(cm));
+        return;
+    }
+    if (fault_.should_stall(setup[0], setup[1])) {
+        log_.append("{\"event\":\"fault_stall\"}");
+        Completion cm;
+        cm.ret.status = -32; // -EPIPE
+        complete(std::move(cm));
+        return;
+    }
+    const int delayMs = fault_.delay_for(setup[0], setup[1]);
     auto r = ac_.on_control(setup[0], setup[1],
                             static_cast<std::uint16_t>(setup[2] | (setup[3] << 8)),
                             static_cast<std::uint16_t>(setup[4] | (setup[5] << 8)),
                             static_cast<std::uint16_t>(setup[6] | (setup[7] << 8)), outData);
+    // 配置描述符损坏注入（GET_DESCRIPTOR config）
+    if ((setup[1] == 0x06) && (setup[3] == 0x02) && r.kind == ControlResult::Kind::Ok)
+        fault_.mutate_config_response(r.data); // 仅损坏注入；断连由 should_disconnect 一次性触发
     Completion cm;
     if (r.kind == ControlResult::Kind::Stall) {
         cm.ret.status = -32; // -EPIPE（STALL 的 Linux errno）
     } else {
         cm.ret.actual_length = static_cast<std::uint32_t>(r.data.size());
         cm.payload = std::move(r.data);
+    }
+    if (delayMs > 0) { // 延迟注入：计时后异步完成
+        auto payload = std::make_shared<std::vector<unsigned char>>(std::move(cm.payload));
+        auto status = cm.ret.status;
+        auto len = cm.ret.actual_length;
+        std::thread([this, delayMs, payload, status, len, complete = std::move(complete)]() mutable {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            Completion d;
+            d.ret.status = status;
+            d.ret.actual_length = len;
+            d.payload = std::move(*payload);
+            complete(std::move(d));
+        }).detach();
+        return;
     }
     complete(std::move(cm));
 }
@@ -163,8 +200,12 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
     }
     const std::uint8_t epAddr = static_cast<std::uint8_t>(
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
-    if (epAddr == 0x86) { // 麦克风 iso IN
-        engine_.on_iso_in(cmd, std::move(complete));
+    if (epAddr == 0x86) { // 麦克风 iso IN：包一层 iso error_count 注入
+        auto wrapped = [this, complete = std::move(complete)](Completion&& cm) mutable {
+            if (auto ec = fault_.iso_error_count()) cm.ret.error_count = ec;
+            complete(std::move(cm));
+        };
+        engine_.on_iso_in(cmd, std::move(wrapped));
         return;
     }
     if (epAddr == 0x82 && snap_.hidConsumerVolume) { // HID 中断 IN：按键报告

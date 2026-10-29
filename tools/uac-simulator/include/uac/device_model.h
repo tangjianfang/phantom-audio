@@ -8,6 +8,8 @@
 #include <uac/desc_hid.h>
 #include <uac/urb_dispatcher.h>
 #include <uac/event_injector.h>
+#include <uac/fault_injector.h>
+#include <functional>
 #include <uac/usbip_proto.h>
 #include <atomic>
 #include <map>
@@ -60,6 +62,8 @@ public:
     void inject_volume_step(int steps); // ±resDb 步进（正=音量+，负=音量-）
     void inject_mute_toggle();
     EventInjector& injector() { return injector_; }
+    FaultInjector& faults() { return fault_; }
+    void set_disconnect_hook(std::function<void()> h) { disconnectHook_ = std::move(h); }
 
     usbip::UsbIpDevice usbip_device() const; // 导出给 server 的设备清单
     std::uint8_t interface_alt(std::uint8_t iface) const;
@@ -82,6 +86,8 @@ private:
     AsEngine engine_;
     std::map<std::uint8_t, std::uint8_t> ifaceAlt_;
     EventInjector injector_;
+    FaultInjector fault_;
+    std::function<void()> disconnectHook_;
     std::vector<std::uint8_t> hidQueue_; // 待发送报告（每项 2B：id+keys）
     struct HeldHid { std::uint32_t seqnum; CompletionFn complete; };
     std::vector<HeldHid> heldHid_;
