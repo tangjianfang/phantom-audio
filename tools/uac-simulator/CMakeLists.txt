@@ -13,15 +13,18 @@ endif()
 # ---------------- 核心静态库 ----------------
 add_library(uac_core STATIC
   src/usbip_proto.cpp
+  src/usbip_server.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(uac_core PUBLIC ws2_32)
 
 # ---------------- 测试 ----------------
 enable_testing()
 add_executable(uac_tests
   tests/test_smoke.cpp
   tests/test_usbip_proto.cpp
+  tests/test_usbip_server.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)
