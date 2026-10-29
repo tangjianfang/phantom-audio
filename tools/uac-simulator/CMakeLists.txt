@@ -28,6 +28,7 @@ add_library(uac_core STATIC
   src/profile.cpp
   src/control_api.cpp
   src/fault_injector.cpp
+  src/goertzel.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -50,6 +51,7 @@ add_executable(uac_tests
   tests/test_profile.cpp
   tests/test_control_api.cpp
   tests/test_fault_injector.cpp
+  tests/test_goertzel.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)
@@ -63,3 +65,6 @@ target_link_libraries(uacsimd PRIVATE uac_core ws2_32)
 
 add_executable(uacsim apps/uacsim/main.cpp)
 target_link_libraries(uacsim PRIVATE ws2_32)
+
+add_executable(host_probe apps/host_probe/main.cpp)
+target_link_libraries(host_probe PRIVATE uac_core ole32)
