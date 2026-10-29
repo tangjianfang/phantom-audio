@@ -194,8 +194,10 @@ bool ControlApi::start(std::uint16_t port, ControlCallbacks cb) {
             if (select(0, &rf, nullptr, nullptr, &tv) <= 0) continue;
             SOCKET s = accept(ls, nullptr, nullptr);
             if (s == INVALID_SOCKET) {
-                // transient failure: keep serving instead of dying
+                // transient failure: keep serving instead of dying; backoff
+                // prevents a select-readable/accept-fail busy loop
                 if (impl_->stopping.load()) return;
+                Sleep(50);
                 continue;
             }
             if (impl_->stopping.load()) { closesocket(s); return; }

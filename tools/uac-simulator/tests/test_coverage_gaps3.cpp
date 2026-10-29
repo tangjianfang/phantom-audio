@@ -130,7 +130,7 @@ TEST_CASE("gap3: feedback EP 0x84 returns Q12.13 value at negotiated rate") {
     std::vector<u8> fb;
     m.on_urb(c, {}, {}, [&](Completion&& cm) { fb = std::move(cm.payload); });
     REQUIRE(fb.size() == 4);
-    // 44100 Hz default snapshot rate: 5.5125 samples/uframe -> 0xB14E (45158)
+    // 48000 Hz default snapshot rate: 6.0 samples/uframe -> 0xC000 (49152)
     const auto v = static_cast<std::uint32_t>(fb[0]) | (fb[1] << 8) | (fb[2] << 16) | (fb[3] << 24);
     CHECK(v == uac::AsEngine::fb_value_12_13(48000)); // snapshot default rate
     CHECK(v == 49152u); // 0xC000

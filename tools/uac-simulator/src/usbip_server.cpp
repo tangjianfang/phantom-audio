@@ -244,8 +244,9 @@ bool UsbIpServer::start(uint16_t port, const std::vector<Export>& exportable) {
             SOCKET s = accept(ls, nullptr, nullptr);
             if (s == INVALID_SOCKET) {
                 // transient failure (e.g. WSAECONNRESET between select and
-                // accept): keep serving instead of killing the accept thread
+                // accept): keep serving; backoff prevents a busy loop
                 if (impl_->stopping.load()) return;
+                Sleep(50);
                 continue;
             }
             if (impl_->stopping.load()) { closesocket(s); return; }

@@ -108,7 +108,7 @@ int RunAutoTestSuite(std::uint16_t port, const std::function<void(const std::str
     GetTempPathA(MAX_PATH, tmp);
     const std::string wav = std::string(tmp) + "uacstudio_selftest.wav";
     DeleteFileA(wav.c_str());
-    s.Step("capture start", s.Post("/capture", "{\"path\":\"" + uacstudio::JsonEscape(wav) + "\"}"), {"\"ok\":true"});
+    s.Step("capture start", s.Post("/capture", "{\"path\":\"" + uac::JsonEscape(wav) + "\"}"), {"\"ok\":true"});
     // push one OUT packet's worth of wall-clock so the sink flushes the header
     Sleep(300);
     s.Post("/source", "{\"kind\":\"sine\",\"hz\":1000}");

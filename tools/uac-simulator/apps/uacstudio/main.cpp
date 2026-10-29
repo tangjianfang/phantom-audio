@@ -345,6 +345,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         for (auto& l : drain) AppendLog(l);
         if (wp == 1) { // suite finished on the worker thread
+            if (g_testThread.joinable()) g_testThread.join(); // must join before reuse
             g_testRunning.store(false);
             EnableWindow(g_btnSelfTest.wnd, TRUE);
             RefreshStatus();
@@ -413,7 +414,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             GetWindowTextW(g_capEdit.wnd, p, MAX_PATH);
             char a[MAX_PATH]{};
             WideCharToMultiByte(CP_UTF8, 0, p, -1, a, MAX_PATH, nullptr, nullptr);
-            Post("/capture", std::string("{\"path\":\"") + uacstudio::JsonEscape(a) +
+            Post("/capture", std::string("{\"path\":\"") + uac::JsonEscape(a) +
                            "\"}", "录音");
             break;
         }

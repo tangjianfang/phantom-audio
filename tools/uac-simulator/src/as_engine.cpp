@@ -36,6 +36,9 @@ void AsEngine::set_rate(std::uint32_t rateHz) {
     std::lock_guard lk(mtx_);
     cfg_.rate = rateHz;
     phase_ = 0.0;
+    // A mid-capture rate change must be reflected in the WAV header, or the
+    // file plays at the wrong pitch with no error anywhere.
+    if (capture_.is_open()) capture_.update_rate(rateHz);
 }
 
 void AsEngine::set_stream_config(StreamConfig cfg) {

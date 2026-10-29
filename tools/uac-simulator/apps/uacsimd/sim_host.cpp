@@ -33,7 +33,6 @@ bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {
 
     if (!api_.start(httpPort, std::move(cb))) return false;
     running_.store(true);
-    (void)usbipPort; // UsbIpServer 端口在 attach 时使用（保持 3240 默认）
     return true;
 }
 
@@ -72,27 +71,29 @@ std::string SimHost::on_attach(const std::string& profileName) {
         namespace fs = std::filesystem;
         // profile 名可带 .json 也可不带；也可为内置名
         std::string path;
-        for (auto cand : {profileName + ".json", profileName, "profiles/" + profileName + ".json"}) {
-            if (fs::exists(fs::path(profiles_dir_) / cand)) {
-                path = (fs::path(profiles_dir_) / cand).string();
-                break;
-            }
-        }
-        // Resolve profiles against the exe directory as a fallback, so the
-        // documented launch path works regardless of the caller's CWD.
-        if (path.empty() && !std::filesystem::exists(profiles_dir_)) {
+        // Fallback resolution against the exe directory: local only, so a
+        // caller-supplied --profiles dir is never silently overwritten.
+        std::string dir = profiles_dir_;
+        if (!std::filesystem::exists(dir)) {
             wchar_t exe[MAX_PATH]{};
             if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
                 namespace fs = std::filesystem;
                 const fs::path exeDir = fs::path(exe).parent_path();
-                for (auto cand : {exeDir / profiles_dir_, exeDir.parent_path() / "profiles",
-                                  exeDir.parent_path().parent_path() / "tools" / "uac-simulator" /
-                                      "profiles"}) {
+                for (auto cand : {exeDir / "profiles", exeDir.parent_path() / "profiles",
+                                  exeDir.parent_path().parent_path() / "tools" /
+                                      "uac-simulator" / "profiles"}) {
                     if (fs::exists(cand)) {
-                        profiles_dir_ = cand.string();
+                        dir = cand.string();
                         break;
                     }
                 }
+            }
+        }
+        // resolve profile file inside the (possibly relocated) dir
+        for (auto cand : {profileName + ".json", profileName}) {
+            if (fs::exists(fs::path(dir) / cand)) {
+                path = (fs::path(dir) / cand).string();
+                break;
             }
         }
         DeviceSnapshot snap;
@@ -116,17 +117,19 @@ std::string SimHost::on_attach(const std::string& profileName) {
         if (!logFile_.empty()) model->log().set_file_sink(logFile_); // per-model NDJSON sink
         models_.emplace_back(profileName, std::move(model));
         model_ = models_.back().second.get();
-        // 重建导出清单：每实例独立 busid/devnum
-        std::vector<usbip::UsbIpDevice> list;
+        // 重建导出清单：每实例独立 busid/devnum，且与各自 dispatcher 配对，
+        // 使 URB 按导入的 busid 路由到正确的设备模型（此前全部走 models_[0]）
+        std::vector<UsbIpServer::Export> list;
         for (std::size_t i = 0; i < models_.size(); ++i) {
             auto d = models_[i].second->usbip_device();
             d.busid = "1-" + std::to_string(i + 1);
             d.devnum = static_cast<std::uint32_t>(i + 1);
             d.path = "/uacsim/inst" + std::to_string(i);
-            list.push_back(d);
+            list.emplace_back(std::move(d), models_[i].second.get());
         }
-        if (!server_.start(3240, *models_[0].second, list))
-            return json{{"error", "usbip listen 3240 failed"}}.dump();
+        if (!server_.start(usbipPort_, list))
+            return json{{"error", "usbip listen " + std::to_string(usbipPort_) + " failed"}}
+                .dump();
         current_profile_ = profileName;
         return json{{"attached", profileName},
                     {"busid", "1-" + std::to_string(models_.size())},

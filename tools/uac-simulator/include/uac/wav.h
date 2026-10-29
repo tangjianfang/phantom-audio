@@ -13,6 +13,7 @@ public:
               std::uint16_t bitsPerSample = 16);
     void write(const std::int16_t* samples, std::size_t count); // 交织声道
     void close(); // 回填 RIFF/data 长度
+    bool update_rate(std::uint32_t rateHz); // mid-capture rate change: patch the fmt chunk
     bool is_open() const { return f_.is_open(); }
     std::uint64_t sample_count() const { return samples_; }
 

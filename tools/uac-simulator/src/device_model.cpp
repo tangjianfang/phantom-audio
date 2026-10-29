@@ -53,8 +53,15 @@ DeviceSnapshot make_uac2_default_snapshot() {
 }
 
 DeviceModel::~DeviceModel() {
-    std::lock_guard lk(delayMtx_);
-    for (auto& t : delayThreads_)
+    // Detach-join WITHOUT holding delayMtx_: a thread racing in handle_ep0's
+    // push path must be able to take the lock, finish, and be joined here;
+    // joining under the mutex would deadlock (or UB on the freed vector).
+    std::vector<std::thread> pending;
+    {
+        std::lock_guard lk(delayMtx_);
+        pending.swap(delayThreads_);
+    }
+    for (auto& t : pending)
         if (t.joinable()) t.join();
 }
 

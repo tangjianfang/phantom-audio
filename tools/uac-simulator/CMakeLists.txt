@@ -71,6 +71,7 @@ add_executable(uacsimd
 target_link_libraries(uacsimd PRIVATE uac_core ws2_32)
 
 add_executable(uacsim apps/uacsim/main.cpp)
+target_include_directories(uacsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(uacsim PRIVATE ws2_32)
 
 add_executable(host_probe apps/host_probe/main.cpp)
@@ -82,5 +83,6 @@ add_executable(uacstudio WIN32
   apps/uacstudio/auto_test.cpp
   apps/uacstudio/uacstudio.rc
 )
+target_include_directories(uacstudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(uacstudio PRIVATE ws2_32 comctl32 advapi32 shell32)
 set_target_properties(uacstudio PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup")

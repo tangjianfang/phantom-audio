@@ -48,6 +48,17 @@ void WavWriter::write(const std::int16_t* samples, std::size_t count) {
     samples_ += count;
 }
 
+bool WavWriter::update_rate(std::uint32_t rateHz) {
+    if (!f_.is_open()) return false;
+    const auto pos = f_.tellp();
+    f_.seekp(24); // fmt chunk: dwSamplesPerSec
+    wr32(f_, rateHz);
+    wr32(f_, rateHz * ch_ * bits_ / 8); // dwBytesPerSec
+    f_.seekp(pos);
+    rate_ = rateHz;
+    return true;
+}
+
 void WavWriter::close() {
     if (!f_.is_open()) return;
     const std::uint32_t dataBytes = static_cast<std::uint32_t>(samples_ * 2);

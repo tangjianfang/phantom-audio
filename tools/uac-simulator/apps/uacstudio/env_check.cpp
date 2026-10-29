@@ -381,6 +381,7 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return TRUE;
     }
     case WM_COMMAND: {
+        if (!ck) return 0; // null guard BEFORE any ck dereference
         const int id = LOWORD(wp);
         if (id == 1) { // 重新检测
             Rebuild(ck);
@@ -390,7 +391,6 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             DestroyWindow(h);
             return 0;
         }
-        if (!ck) return 0;
         if (id >= 1000) {
             const int row = (id - 1000) / 10, act = (id - 1000) % 10;
             if (row < static_cast<int>(ck->rows.size())) {

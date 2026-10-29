@@ -2,6 +2,7 @@
 // 用法：uacsim.exe [--host 127.0.0.1:3241] <command> [args]
 //   status / attach <profile> / detach / event <type> / inject <json> / source <json>
 //   capture <path|-> / log [n]
+#include <uac/json_util.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <cstdio>
@@ -9,16 +10,6 @@
 #include <string>
 
 namespace {
-
-// JSON string escaping for Windows paths (shared rule with the GUI client)
-std::string JsonEscape(const std::string& in) {
-    std::string out;
-    for (char c : in) {
-        if (c == 0x5C || c == '"') out += static_cast<char>(0x5C);
-        out += c;
-    }
-    return out;
-}
 
 std::string http_post_get(const std::string& host, std::uint16_t port, const char* method,
                           const std::string& path, const std::string& body) {
@@ -72,7 +63,7 @@ int main(int argc, char** argv) {
     if (cmd == "status") out = http_post_get(host, port, "GET", "/status", "");
     else if (cmd == "attach" && i < argc)
         out = http_post_get(host, port, "POST", "/attach",
-                            std::string("{\"profile\":\"") + argv[i] + "\"}");
+                            std::string("{\"profile\":\"") + uac::JsonEscape(argv[i]) + "\"}");
     else if (cmd == "detach") out = http_post_get(host, port, "POST", "/detach", "");
     else if (cmd == "event" && i < argc)
         out = http_post_get(host, port, "POST", "/event",
@@ -84,7 +75,7 @@ int main(int argc, char** argv) {
     else if (cmd == "capture")
         out = http_post_get(host, port, "POST", "/capture",
                             i < argc && std::string(argv[i]) != "-"
-                                ? std::string("{\"path\":\"") + JsonEscape(argv[i]) + "\"}"
+                                ? std::string("{\"path\":\"") + uac::JsonEscape(argv[i]) + "\"}"
                                 : "{\"path\":\"\"}");
     else if (cmd == "log")
         out = http_post_get(host, port, "GET",
