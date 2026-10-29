@@ -63,6 +63,7 @@ Ctl g_btnHidRel, g_btnStall, g_btnDelay, g_btnDisconnect, g_btnClear;
 Ctl g_lblStream, g_hzEdit, g_btnSine, g_btnSilence, g_capEdit, g_btnCapStart, g_btnCapStop;
 Ctl g_lblLog, g_logEdit, g_btnSelfTest;
 std::atomic<bool> g_testRunning{false};
+std::thread g_testThread{};
 std::mutex g_lineMtx;
 std::vector<std::string> g_lines;
 constexpr UINT WM_APP_TESTLINE = WM_APP + 1;
@@ -197,6 +198,7 @@ void RefreshStatus() {
 }
 
 void RefreshLog() {
+    if (g_testRunning.load()) return; // self-test output owns the log panel
     const auto r = uacstudio::http_req(g_port, "GET", "/log?n=200", "");
     if (r.empty() || r.size() < 3 || r.size() > 60000) return;
     SetWindowTextA(g_logEdit.wnd, r.c_str());
@@ -358,7 +360,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_testRunning.exchange(true)) break;
             EnableWindow(g_btnSelfTest.wnd, FALSE);
             AppendLog("==== starting self-test suite (worker thread) ====");
-            std::thread([h] {
+            g_testThread = std::thread([h] {
                 const int failed = uacstudio::RunAutoTestSuite(g_port, [h](const std::string& line) {
                     {
                         std::lock_guard lk(g_lineMtx);
@@ -373,7 +375,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                                                         std::to_string(failed) + " FAILED");
                 }
                 PostMessageA(h, WM_APP_TESTLINE, 1, 0); // 1 = finished
-            }).detach();
+            });
             break;
         }
         case 910:
@@ -411,7 +413,8 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             GetWindowTextW(g_capEdit.wnd, p, MAX_PATH);
             char a[MAX_PATH]{};
             WideCharToMultiByte(CP_UTF8, 0, p, -1, a, MAX_PATH, nullptr, nullptr);
-            Post("/capture", std::string("{\"path\":\"") + a + "\"}", "录音");
+            Post("/capture", std::string("{\"path\":\"") + uacstudio::JsonEscape(a) +
+                           "\"}", "录音");
             break;
         }
         case 405: Post("/capture", "{\"path\":\"\"}", "录音停"); break;
@@ -440,6 +443,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         KillTimer(h, 1);
         KillTimer(h, 2);
+        if (g_testThread.joinable()) g_testThread.join(); // no detached workers at exit
         PostQuitMessage(0);
         return 0;
     default:

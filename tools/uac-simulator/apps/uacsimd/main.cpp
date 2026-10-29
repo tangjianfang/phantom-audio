@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "uacsimd: control api listen %u failed\n", httpPort);
         return 1;
     }
-    if (!logFile.empty() && host.model()) host.model()->log().set_file_sink(logFile);
+    host.set_log_file(logFile); // applied to every model created at attach time
     if (!initialProfile.empty()) {
         const auto r = host.on_attach(initialProfile);
         printf("attach(%s) -> %s\n", initialProfile.c_str(), r.c_str());

@@ -12,6 +12,7 @@
 #include <uac/usbip_proto.h>
 #include <uac/wav.h>
 #include <winsock2.h>
+#include <windows.h>
 #include <fstream>
 #include <thread>
 
@@ -94,18 +95,25 @@ TEST_CASE("ac: UAC1 mute set bad size and unknown FU entity stall") {
 // ---------- log_store file sink ----------
 TEST_CASE("log store file sink roundtrip") {
     LogStore ls;
-    CHECK(ls.set_file_sink("cov_log_test.ndjson"));
+    // write into %TEMP%: the sink appends, so a repo-relative fixture would
+    // be mutated on every test run (this previously dirtied the worktree)
+    char tmp[MAX_PATH]{};
+    GetTempPathA(MAX_PATH, tmp);
+    const std::string path = std::string(tmp) + "uac_cov_log_test.ndjson";
+    DeleteFileA(path.c_str());
+    CHECK(ls.set_file_sink(path));
     ls.append("{\"a\":1}");
     ls.append("{\"b\":2}");
-    ls.set_file_sink(""); // 关闭并 flush
-    std::ifstream f("cov_log_test.ndjson");
+    ls.set_file_sink(""); // close and flush
+    std::ifstream f(path);
     REQUIRE(f.is_open());
     std::string l1, l2;
     std::getline(f, l1);
     std::getline(f, l2);
     CHECK(l1 == "{\"a\":1}");
     CHECK(l2 == "{\"b\":2}");
-    std::remove("cov_log_test.ndjson");
+    f.close();
+    std::remove(path.c_str());
 }
 
 // ---------- profile error paths ----------

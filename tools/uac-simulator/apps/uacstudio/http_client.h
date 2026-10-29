@@ -11,6 +11,8 @@
 
 namespace uacstudio {
 
+constexpr char chr_bs() { return 0x5C; } // backslash
+
 // Winsock self-initialization: safe for every consumer (GUI/runner/CLI),
 // so callers never need their own WSAStartup just to reach the local API.
 inline void wsa_ensure_init() {
@@ -49,6 +51,18 @@ inline bool http_post(std::uint16_t port, const std::string& path, const std::st
     const auto r = http_req(port, "POST", path, body);
     if (out) *out = r;
     return !r.empty();
+}
+
+// Escape a string for embedding inside a JSON string literal (Windows path
+// backslashes would otherwise produce invalid JSON). Shared by the GUI, the
+// self-test suite, and the CLI.
+inline std::string JsonEscape(const std::string& in) {
+    std::string out;
+    for (char c : in) {
+        if (c == chr_bs() || c == '"') out += chr_bs();
+        out += c;
+    }
+    return out;
 }
 
 } // namespace uacstudio

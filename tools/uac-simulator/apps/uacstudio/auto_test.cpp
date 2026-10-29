@@ -12,17 +12,6 @@
 namespace uacstudio {
 
 namespace {
-// Escape a string for embedding inside a JSON string literal
-// (Windows path backslashes would otherwise break the JSON).
-std::string JsonEscape(const std::string& in) {
-    std::string out;
-    for (char c : in) {
-        if (c == '\\' || c == '"') out += '\\';
-        out += c;
-    }
-    return out;
-}
-
 
 struct Suite {
     std::uint16_t port;
@@ -83,7 +72,7 @@ int RunAutoTestSuite(std::uint16_t port, const std::function<void(const std::str
     s.Step("attach uac2-48k", s.Post("/attach", "{\"profile\":\"uac2-48k\"}"),
            {"\"attached\":\"uac2-48k\"", "\"instances\":1"});
     s.Step("status: listening + 1 instance", s.Get("/status"),
-           {"\"listening\":true", "\"instances\":1", "\"sampleRate\":44100"});
+           {"\"listening\":true", "\"instances\":1", "\"sampleRate\":48000"});
 
     // 4) volume events (0 dB is max; step down then verify, then back up)
     s.Step("event volume_down", s.Post("/event", "{\"type\":\"volume_down\"}"),
@@ -119,7 +108,7 @@ int RunAutoTestSuite(std::uint16_t port, const std::function<void(const std::str
     GetTempPathA(MAX_PATH, tmp);
     const std::string wav = std::string(tmp) + "uacstudio_selftest.wav";
     DeleteFileA(wav.c_str());
-    s.Step("capture start", s.Post("/capture", "{\"path\":\"" + JsonEscape(wav) + "\"}"), {"\"ok\":true"});
+    s.Step("capture start", s.Post("/capture", "{\"path\":\"" + uacstudio::JsonEscape(wav) + "\"}"), {"\"ok\":true"});
     // push one OUT packet's worth of wall-clock so the sink flushes the header
     Sleep(300);
     s.Post("/source", "{\"kind\":\"sine\",\"hz\":1000}");

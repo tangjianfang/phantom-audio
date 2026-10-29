@@ -10,6 +10,7 @@
 #include <uac/event_injector.h>
 #include <uac/fault_injector.h>
 #include <functional>
+#include <thread>
 #include <uac/usbip_proto.h>
 #include <atomic>
 #include <map>
@@ -45,6 +46,7 @@ public:
     // clock 为空时使用 WallClock；测试注入 ManualClock 获得确定性 pacing
     explicit DeviceModel(DeviceSnapshot snap,
                          std::unique_ptr<class MicroframeClock> clock = nullptr);
+    ~DeviceModel();
 
     // UrbDispatcher
     void on_import(const usbip::UsbIpDevice& dev) override;
@@ -86,6 +88,9 @@ private:
     AsEngine engine_;
     std::map<std::uint8_t, std::uint8_t> ifaceAlt_;
     EventInjector injector_;
+    std::uint32_t lastRate_ = 0;              // host-driven rate sync into the engine
+    std::vector<std::thread> delayThreads_;   // fault-delay completions (joined in dtor)
+    std::mutex delayMtx_;
     FaultInjector fault_;
     std::function<void()> disconnectHook_;
     std::vector<std::uint8_t> hidQueue_; // 待发送报告（每项 2B：id+keys）

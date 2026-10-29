@@ -52,6 +52,12 @@ DeviceSnapshot make_uac2_default_snapshot() {
     return s;
 }
 
+DeviceModel::~DeviceModel() {
+    std::lock_guard lk(delayMtx_);
+    for (auto& t : delayThreads_)
+        if (t.joinable()) t.join();
+}
+
 DeviceModel::DeviceModel(DeviceSnapshot snap, std::unique_ptr<MicroframeClock> clock)
     : snap_(std::move(snap)), clock_(clock ? std::move(clock) : std::make_unique<WallClock>()),
       ac_(snap_.ac, log_), engine_(*clock_, log_, snap_.stream),
@@ -168,6 +174,13 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     // 配置描述符损坏注入（GET_DESCRIPTOR config）
     if ((setup[1] == 0x06) && (setup[3] == 0x02) && r.kind == ControlResult::Kind::Ok)
         fault_.mutate_config_response(r.data); // 仅损坏注入；断连由 should_disconnect 一次性触发
+    // UAC2 clock SET_CUR (and UAC1 endpoint SET_CUR) update st_.sampleRate
+    // inside AcProcessor; mirror it into the streaming engine so IN packets
+    // are paced and sized at the negotiated rate.
+    if (snap_.ac.sampleRate != lastRate_) {
+        lastRate_ = snap_.ac.sampleRate;
+        engine_.set_rate(lastRate_);
+    }
     Completion cm;
     if (r.kind == ControlResult::Kind::Stall) {
         cm.ret.status = -32; // -EPIPE（STALL 的 Linux errno）
@@ -179,14 +192,17 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
         auto payload = std::make_shared<std::vector<unsigned char>>(std::move(cm.payload));
         auto status = cm.ret.status;
         auto len = cm.ret.actual_length;
-        std::thread([this, delayMs, payload, status, len, complete = std::move(complete)]() mutable {
+        std::thread th([this, delayMs, payload, status, len,
+                        complete = std::move(complete)]() mutable {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             Completion d;
             d.ret.status = status;
             d.ret.actual_length = len;
             d.payload = std::move(*payload);
             complete(std::move(d));
-        }).detach();
+        });
+        std::lock_guard lk(delayMtx_);
+        delayThreads_.push_back(std::move(th));
         return;
     }
     complete(std::move(cm));
@@ -200,6 +216,15 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
     }
     const std::uint8_t epAddr = static_cast<std::uint8_t>(
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
+    if (epAddr == 0x84) { // UAC2 explicit feedback IN: current Q12.13 value
+        const auto fb = AsEngine::fb_value_12_13(snap_.ac.sampleRate);
+        Completion cm;
+        cm.ret.actual_length = 4;
+        cm.payload = {static_cast<unsigned char>(fb), static_cast<unsigned char>(fb >> 8),
+                      static_cast<unsigned char>(fb >> 16), static_cast<unsigned char>(fb >> 24)};
+        complete(std::move(cm));
+        return;
+    }
     if (epAddr == 0x86) { // 麦克风 iso IN：包一层 iso error_count 注入
         auto wrapped = [this, complete = std::move(complete)](Completion&& cm) mutable {
             if (auto ec = fault_.iso_error_count()) cm.ret.error_count = ec;
@@ -209,11 +234,18 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     if (epAddr == 0x82 && snap_.hidConsumerVolume) { // HID 中断 IN：按键报告
-        if (!hidQueue_.empty()) {
+        std::vector<std::uint8_t> report;
+        {
+            std::lock_guard lk(mtx_);
+            if (hidQueue_.size() >= 2) {
+                report = {hidQueue_.front(), hidQueue_[1]};
+                hidQueue_.erase(hidQueue_.begin(), hidQueue_.begin() + 2);
+            }
+        }
+        if (!report.empty()) {
             Completion cm;
             cm.ret.actual_length = 2;
-            cm.payload = {hidQueue_.front(), hidQueue_[1]};
-            hidQueue_.erase(hidQueue_.begin(), hidQueue_.begin() + 2);
+            cm.payload = std::move(report);
             complete(std::move(cm));
         } else {
             std::lock_guard lk(mtx_);

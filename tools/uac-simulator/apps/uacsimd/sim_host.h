@@ -16,6 +16,8 @@ public:
     explicit SimHost(std::string profilesDir);
 
     bool start(std::uint16_t usbipPort, std::uint16_t httpPort);
+    // log file applied to every subsequently attached model (fixes --log-file)
+    void set_log_file(const std::string& path) { logFile_ = path; }
     void stop();
     bool running() const { return running_.load(); }
 
@@ -42,6 +44,8 @@ private:
     UsbIpServer server_;
     ControlApi api_;
     std::string current_profile_;
+    std::uint16_t usbipPort_ = 3240; // honored by every (re)listen
+    std::string logFile_;            // per-model NDJSON sink
     std::atomic<bool> running_{false};
 };
 

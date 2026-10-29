@@ -9,6 +9,17 @@
 #include <string>
 
 namespace {
+
+// JSON string escaping for Windows paths (shared rule with the GUI client)
+std::string JsonEscape(const std::string& in) {
+    std::string out;
+    for (char c : in) {
+        if (c == 0x5C || c == '"') out += static_cast<char>(0x5C);
+        out += c;
+    }
+    return out;
+}
+
 std::string http_post_get(const std::string& host, std::uint16_t port, const char* method,
                           const std::string& path, const std::string& body) {
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
@@ -73,7 +84,7 @@ int main(int argc, char** argv) {
     else if (cmd == "capture")
         out = http_post_get(host, port, "POST", "/capture",
                             i < argc && std::string(argv[i]) != "-"
-                                ? std::string("{\"path\":\"") + argv[i] + "\"}"
+                                ? std::string("{\"path\":\"") + JsonEscape(argv[i]) + "\"}"
                                 : "{\"path\":\"\"}");
     else if (cmd == "log")
         out = http_post_get(host, port, "GET",

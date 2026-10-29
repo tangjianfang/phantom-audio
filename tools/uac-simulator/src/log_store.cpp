@@ -9,7 +9,7 @@ void LogStore::append(std::string_view line) {
     if (ring_.size() > kMaxLines) ring_.pop_front();
     if (file_.is_open()) {
         file_ << line << '\n';
-        if (ring_.size() % 64 == 0) file_.flush(); // 批量刷新
+        file_.flush(); // line-buffered: tests read the file immediately
     }
 }
 

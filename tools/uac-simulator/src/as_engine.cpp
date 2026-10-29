@@ -153,16 +153,28 @@ void AsEngine::on_iso_out(std::span<const unsigned char> payload,
     std::lock_guard lk(mtx_);
     ++stats_.outRequests;
     if (!capture_.is_open()) return;
+    const std::size_t slot = std::max<std::size_t>(cfg_.bytesPerSample, 1);
+    auto write_packet = [&](const unsigned char* data, std::size_t bytes) {
+        // The sink is 16-bit PCM: for wider slots keep the low 16 bits of
+        // each slot (little-endian), preserving sample count and channels.
+        std::vector<std::int16_t> cvt;
+        if (slot > 2) {
+            cvt.reserve(bytes / slot);
+            for (std::size_t off = 0; off + slot <= bytes; off += slot)
+                cvt.push_back(static_cast<std::int16_t>(data[off] | (data[off + 1] << 8)));
+            capture_.write(cvt.data(), cvt.size());
+        } else {
+            capture_.write(reinterpret_cast<const std::int16_t*>(data), bytes / 2);
+        }
+    };
     if (!iso.empty()) {
         for (auto&& p : iso) {
             if (p.offset + p.actual_length > payload.size()) break;
-            const auto* s = reinterpret_cast<const std::int16_t*>(payload.data() + p.offset);
-            capture_.write(s, p.actual_length / 2);
+            write_packet(payload.data() + p.offset, p.actual_length);
             stats_.outBytes += p.actual_length;
         }
     } else {
-        const auto* s = reinterpret_cast<const std::int16_t*>(payload.data());
-        capture_.write(s, payload.size() / 2);
+        write_packet(payload.data(), payload.size());
         stats_.outBytes += payload.size();
     }
 }

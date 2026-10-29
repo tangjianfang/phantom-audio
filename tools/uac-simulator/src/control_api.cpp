@@ -73,8 +73,8 @@ struct ControlApi::Impl {
         const auto m1 = line.find(' ');
         const auto m2 = line.find(' ', m1 + 1);
         if (m1 == std::string::npos || m2 == std::string::npos) {
-            send_all(s, http_response(400, "{\"error\":\"bad request\"}").c_str(),
-                     http_response(400, "{\"error\":\"bad request\"}").size());
+            const auto resp = http_response(400, "{\"error\":\"bad request\"}");
+            send_all(s, resp.c_str(), resp.size());
             closesocket(s);
             return;
         }
@@ -193,7 +193,11 @@ bool ControlApi::start(std::uint16_t port, ControlCallbacks cb) {
             timeval tv{0, 100 * 1000};
             if (select(0, &rf, nullptr, nullptr, &tv) <= 0) continue;
             SOCKET s = accept(ls, nullptr, nullptr);
-            if (s == INVALID_SOCKET) return;
+            if (s == INVALID_SOCKET) {
+                // transient failure: keep serving instead of dying
+                if (impl_->stopping.load()) return;
+                continue;
+            }
             if (impl_->stopping.load()) { closesocket(s); return; }
             impl_->serve(s); // 串行足够（本地单客户端场景）
         }

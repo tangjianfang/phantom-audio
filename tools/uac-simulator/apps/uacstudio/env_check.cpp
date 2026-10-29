@@ -333,14 +333,17 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLORSTATIC: {
         auto dc = reinterpret_cast<HDC>(wp);
         SetBkColor(dc, C_BG);
-        SetTextColor(dc, reinterpret_cast<HWND>(lp) == ck->hint ? C_MUTED : C_INK);
-        return reinterpret_cast<LRESULT>(ck->brBg);
+        SetTextColor(dc, ck && reinterpret_cast<HWND>(lp) == ck->hint ? C_MUTED : C_INK);
+        return reinterpret_cast<LRESULT>(ck ? ck->brBg : nullptr);
     }
     case WM_DRAWITEM: {
+        if (!ck) return DefWindowProcW(h, msg, wp, lp);
         auto* dis = reinterpret_cast<LPDRAWITEMSTRUCT>(lp);
         int idx = static_cast<int>(dis->CtlID);
         if (idx >= 1000 && (idx % 10) == 0) { // LED
-            const int state = ck->rows[(idx - 1000) / 10].item.state;
+            const int row = (idx - 1000) / 10;
+            if (row >= static_cast<int>(ck->rows.size())) return TRUE;
+            const int state = ck->rows[row].item.state;
             const COLORREF c = state == 2 ? C_OK : state == 1 ? C_WARN : C_FAULT;
             HBRUSH b = CreateSolidBrush(c);
             const int cx = (dis->rcItem.left + dis->rcItem.right) / 2;
@@ -387,6 +390,7 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             DestroyWindow(h);
             return 0;
         }
+        if (!ck) return 0;
         if (id >= 1000) {
             const int row = (id - 1000) / 10, act = (id - 1000) % 10;
             if (row < static_cast<int>(ck->rows.size())) {
@@ -408,10 +412,15 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         auto dc = reinterpret_cast<HDC>(wp);
         RECT rc;
         GetClientRect(h, &rc);
-        FillRect(dc, &rc, ck->brBg);
+        if (ck) FillRect(dc, &rc, ck->brBg);
         return 1;
     }
     case WM_DESTROY:
+        // Clear the stack object's window handle FIRST so the modal loop in
+        // ShowEnvCheck() observes the exit and unwinds (previously it only
+        // exited on WM_QUIT: MarkFirstRunDone never ran and each open nested
+        // another permanent message loop).
+        if (ck) ck->wnd = nullptr;
         EnableWindow(GetParent(h), TRUE);
         SetForegroundWindow(GetParent(h));
         SetFocus(GetParent(h));

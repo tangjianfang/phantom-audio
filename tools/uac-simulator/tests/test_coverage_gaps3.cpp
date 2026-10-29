@@ -11,6 +11,7 @@
 
 using namespace uac;
 using u8 = std::uint8_t;
+using uac::usbip::CmdSubmit;
 
 TEST_CASE("gap3: uac1 mute SET with data updates both channels") {
     AcState st;
@@ -113,4 +114,57 @@ TEST_CASE("gap3: engine silence source and file-open-fail fall to silence") {
     for (auto b : d2)
         if (b != 0) allZero = false;
     CHECK(allZero);
+}
+
+// ---------- review fixes: feedback EP / rate sync ----------
+TEST_CASE("gap3: feedback EP 0x84 returns Q12.13 value at negotiated rate") {
+    auto clock = std::make_unique<ManualClock>();
+    DeviceModel m(make_uac2_default_snapshot(), std::move(clock));
+    usbip::UrbCommand c{};
+    c.is_submit = true;
+    c.basic.command = usbip::CMD_SUBMIT;
+    c.basic.seqnum = 71;
+    c.basic.direction = usbip::DIR_IN;
+    c.basic.ep = 4; // 0x84
+    c.submit.transfer_buffer_length = 4;
+    std::vector<u8> fb;
+    m.on_urb(c, {}, {}, [&](Completion&& cm) { fb = std::move(cm.payload); });
+    REQUIRE(fb.size() == 4);
+    // 44100 Hz default snapshot rate: 5.5125 samples/uframe -> 0xB14E (45158)
+    const auto v = static_cast<std::uint32_t>(fb[0]) | (fb[1] << 8) | (fb[2] << 16) | (fb[3] << 24);
+    CHECK(v == uac::AsEngine::fb_value_12_13(48000)); // snapshot default rate
+    CHECK(v == 49152u); // 0xC000
+}
+
+TEST_CASE("gap3: UAC2 clock SET_CUR re-times the IN engine") {
+    auto clock = std::make_unique<ManualClock>();
+    DeviceModel m(make_uac2_default_snapshot(), std::move(clock));
+    // host sets 96 kHz via CS_SAM_FREQ CUR on the clock source (entity 4)
+    usbip::UrbCommand c{};
+    c.is_submit = true;
+    c.basic.command = usbip::CMD_SUBMIT;
+    c.basic.seqnum = 72;
+    c.basic.direction = usbip::DIR_OUT;
+    c.basic.ep = 0;
+    CmdSubmit cs{0, 4, -1, 0, 0, {}};
+    const u8 setup[8] = {0x21, 0x01, 0x00, 0x01, 0x00, 0x04, 4, 0}; // wValue: CN=0 CS=1; wIndex: iface=0 entity=4
+    std::copy(setup, setup + 8, cs.setup);
+    c.submit = cs;
+    std::vector<u8> out{0x00, 0x77, 0x01, 0x00}; // 96000 = 0x00017700 LE
+    m.on_urb(c, out, {}, [](Completion&&) {});
+    CHECK(m.ac_state().sampleRate == 96000);
+    // mic IN packet at 96 kHz stereo 4B slot: 96 samples/ms -> 768 B
+    c = usbip::UrbCommand{};
+    c.is_submit = true;
+    c.basic.command = usbip::CMD_SUBMIT;
+    c.basic.seqnum = 73;
+    c.basic.direction = usbip::DIR_IN;
+    c.basic.ep = 6;
+    c.submit.number_of_packets = 1;
+    std::vector<u8> payload;
+    m.engine().on_iso_in(c, [&](Completion&& cm) { payload = std::move(cm.payload); });
+    auto* mc = dynamic_cast<ManualClock*>(&m.clock());
+    mc->advance_to(1000);
+    m.pump();
+    CHECK(payload.size() == 768); // engine re-timed to 96 kHz
 }

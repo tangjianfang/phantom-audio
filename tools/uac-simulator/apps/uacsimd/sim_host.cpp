@@ -2,6 +2,7 @@
 #include "sim_host.h"
 #include <uac/version.h>
 #include <nlohmann/json.hpp>
+#include <windows.h>
 
 namespace uac {
 
@@ -77,6 +78,23 @@ std::string SimHost::on_attach(const std::string& profileName) {
                 break;
             }
         }
+        // Resolve profiles against the exe directory as a fallback, so the
+        // documented launch path works regardless of the caller's CWD.
+        if (path.empty() && !std::filesystem::exists(profiles_dir_)) {
+            wchar_t exe[MAX_PATH]{};
+            if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+                namespace fs = std::filesystem;
+                const fs::path exeDir = fs::path(exe).parent_path();
+                for (auto cand : {exeDir / profiles_dir_, exeDir.parent_path() / "profiles",
+                                  exeDir.parent_path().parent_path() / "tools" / "uac-simulator" /
+                                      "profiles"}) {
+                    if (fs::exists(cand)) {
+                        profiles_dir_ = cand.string();
+                        break;
+                    }
+                }
+            }
+        }
         DeviceSnapshot snap;
         if (!path.empty()) {
             snap = build_snapshot(load_profile(path));
@@ -95,6 +113,7 @@ std::string SimHost::on_attach(const std::string& profileName) {
         auto model = std::make_unique<DeviceModel>(std::move(snap));
         model->engine().set_source_sine(1000.0, 0.5);
         model->set_disconnect_hook([this] { server_.kick(); });
+        if (!logFile_.empty()) model->log().set_file_sink(logFile_); // per-model NDJSON sink
         models_.emplace_back(profileName, std::move(model));
         model_ = models_.back().second.get();
         // 重建导出清单：每实例独立 busid/devnum

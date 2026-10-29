@@ -50,17 +50,18 @@ bool recv_all(SOCKET s, unsigned char* p, size_t n) {
 struct UsbIpServer::Impl {
     struct Conn { // 每个 IMPORT 连接的独立状态
         SOCKET s = INVALID_SOCKET;
-        std::mutex sendMtx;
+        UrbDispatcher* disp = nullptr; // owning device model's dispatcher
         std::mutex cancelMtx;
         std::set<uint32_t> cancelled;
+        std::mutex sendMtx;
     };
 
     std::atomic<bool> stopping{false};
     std::atomic<SOCKET> listener{INVALID_SOCKET};
     std::thread acceptThread;
 
-    UrbDispatcher* disp = nullptr;
-    std::vector<usbip::UsbIpDevice> devices;
+    // exported devices with their owning dispatchers (busid -> pair)
+    std::vector<std::pair<usbip::UsbIpDevice, UrbDispatcher*>> devices;
 
     std::mutex devMtx; // busid → 通道（attached 即在表中）
     std::map<std::string, std::shared_ptr<Conn>> channels;
@@ -116,33 +117,38 @@ struct UsbIpServer::Impl {
             const auto code = uac::rd_be<uint16_t>(&common[2]);
 
             if (code == OP_REQ_DEVLIST) {
-                if (!send_all(s, encode_devlist_reply(devices))) break;
+                std::vector<UsbIpDevice> list;
+                list.reserve(devices.size());
+                for (auto&& d : devices) list.push_back(d.first);
+                if (!send_all(s, encode_devlist_reply(list))) break;
                 continue;
             }
             if (code == OP_REQ_IMPORT) {
                 unsigned char body[32];
                 if (!recv_all(s, body, sizeof(body))) break;
                 const auto busid = decode_import_busid({body, 32});
-                const UsbIpDevice* found = nullptr;
+                const std::pair<usbip::UsbIpDevice, UrbDispatcher*>* found = nullptr;
                 for (auto&& d : devices)
-                    if (d.busid == busid) { found = &d; break; }
+                    if (d.first.busid == busid) { found = &d; break; }
                 if (!found) {
-                    send_all(s, encode_import_reply(devices.empty() ? UsbIpDevice{} : devices[0], 1));
+                    send_all(s, encode_import_reply(devices.empty() ? UsbIpDevice{} : devices[0].first, 1));
                     break;
                 }
                 auto conn = std::make_shared<Conn>();
                 conn->s = s;
+                conn->disp = found->second;
                 {
                     std::lock_guard lk(devMtx);
                     if (channels.count(busid)) { // 已占用
-                        send_all(s, encode_import_reply(*found, 1));
+                        send_all(s, encode_import_reply(found->first, 1));
                         break;
                     }
-                    if (!send_all(s, encode_import_reply(*found, 0))) break;
+                    if (!send_all(s, encode_import_reply(found->first, 0))) break;
                     channels[busid] = conn;
                 }
-                disp->on_import(*found);
-                channelThreads.emplace_back([this, busid, conn] { // uac-cov:thread
+                conn->disp->on_import(found->first);
+                UrbDispatcher* disp = conn->disp;
+                channelThreads.emplace_back([this, busid, conn, disp] { // uac-cov:thread
                     urb_loop(*conn);
                     {
                         std::lock_guard lk(devMtx);
@@ -178,16 +184,16 @@ struct UsbIpServer::Impl {
                     iso = decode_iso_descs(iso_raw);
                 }
                 auto conn = shared_from(c);
-                disp->on_urb(*cmd, payload, iso,
-                             wrap_completion(conn, cmd->basic.seqnum, CompletionFn{}));
+                c.disp->on_urb(*cmd, payload, iso,
+                               wrap_completion(conn, cmd->basic.seqnum, CompletionFn{}));
             } else {
                 {
                     std::lock_guard lk(c.cancelMtx);
                     c.cancelled.insert(cmd->unlink_seqnum);
                 }
                 auto conn = shared_from(c);
-                disp->on_unlink(cmd->basic.seqnum, cmd->unlink_seqnum,
-                                wrap_unlink(conn, cmd->basic.seqnum, UnlinkResultFn{}));
+                c.disp->on_unlink(cmd->basic.seqnum, cmd->unlink_seqnum,
+                                  wrap_unlink(conn, cmd->basic.seqnum, UnlinkResultFn{}));
             }
         }
         {
@@ -207,11 +213,9 @@ struct UsbIpServer::Impl {
 UsbIpServer::UsbIpServer() : impl_(std::make_unique<Impl>()) {}
 UsbIpServer::~UsbIpServer() { stop(); }
 
-bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
-                        std::vector<usbip::UsbIpDevice> exportable) {
+bool UsbIpServer::start(uint16_t port, const std::vector<Export>& exportable) {
     wsa_init_once();
-    impl_->disp = &dispatcher;
-    impl_->devices = std::move(exportable);
+    impl_->devices = exportable;
 
     SOCKET ls = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (ls == INVALID_SOCKET) return false;
@@ -238,7 +242,12 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
             timeval tv{0, 100 * 1000};
             if (select(0, &rf, nullptr, nullptr, &tv) <= 0) continue;
             SOCKET s = accept(ls, nullptr, nullptr);
-            if (s == INVALID_SOCKET) return;
+            if (s == INVALID_SOCKET) {
+                // transient failure (e.g. WSAECONNRESET between select and
+                // accept): keep serving instead of killing the accept thread
+                if (impl_->stopping.load()) return;
+                continue;
+            }
             if (impl_->stopping.load()) { closesocket(s); return; }
             impl_->serve_control(s);
         }
@@ -266,6 +275,14 @@ void UsbIpServer::kick() {
     std::lock_guard lk(impl_->devMtx);
     for (auto&& [busid, c] : impl_->channels)
         if (c->s != INVALID_SOCKET) { shutdown(c->s, SD_BOTH); closesocket(c->s); c->s = INVALID_SOCKET; }
+}
+
+bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
+                        std::vector<usbip::UsbIpDevice> exportable) {
+    std::vector<Export> list;
+    list.reserve(exportable.size());
+    for (auto& d : exportable) list.emplace_back(std::move(d), &dispatcher);
+    return start(port, list);
 }
 
 bool UsbIpServer::attached() const {
