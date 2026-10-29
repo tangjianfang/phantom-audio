@@ -1,0 +1,23 @@
+{
+  "protocol": "uac2",
+  "usb": {
+    "vid": "0x1D50",
+    "pid": "0x6223",
+    "bcdDevice": "0x0100",
+    "manufacturer": "Phantom Audio Labs",
+    "product": "UAC2 Headset (HID keys)",
+    "serial": "PASIM-0002"
+  },
+  "audio": {
+    "channels": 2,
+    "rates": [48000],
+    "subslot": 2,
+    "bits": 16,
+    "volumeDb": { "min": -30.0, "max": 0.0, "res": 2.0 },
+    "micIn": true,
+    "spkOut": true,
+    "acInterruptEp": false,
+    "feedbackEp": true
+  },
+  "hid": { "consumerVolume": true }
+}

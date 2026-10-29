@@ -1,0 +1,22 @@
+{
+  "protocol": "uac1",
+  "usb": {
+    "vid": "0x0D8C",
+    "pid": "0x0103",
+    "bcdDevice": "0x0010",
+    "manufacturer": "Phantom Audio Labs",
+    "product": "UAC1 Simulator",
+    "serial": ""
+  },
+  "audio": {
+    "channels": 2,
+    "rates": [44100, 48000],
+    "subslot": 2,
+    "bits": 16,
+    "volumeDb": { "min": -24.0, "max": 0.0, "res": 1.0 },
+    "micIn": true,
+    "spkOut": true,
+    "acInterruptEp": false
+  },
+  "hid": { "consumerVolume": false }
+}

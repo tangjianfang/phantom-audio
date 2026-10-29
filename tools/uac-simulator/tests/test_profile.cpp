@@ -1,0 +1,107 @@
+// Profile 加载/校验/快照组装测试
+#include <doctest/doctest.h>
+#include <uac/profile.h>
+#include <fstream>
+#include <cstdio>
+
+using namespace uac;
+
+namespace {
+std::string write_tmp(const char* name, const std::string& content) {
+    const std::string path = std::string(name);
+    std::ofstream f(path);
+    f << content;
+    return path;
+}
+} // namespace
+
+TEST_CASE("built-in profiles load and build valid snapshots") {
+    const char* files[] = {"profiles/uac1-cmedia-sim.json", "profiles/uac2-48k.json",
+                           "profiles/uac2-hid-headset.json"};
+    for (auto* f : files) {
+        auto p = load_profile(f);
+        CAPTURE(f);
+        auto snap = build_snapshot(p);
+        auto v = desc::parse_config(snap.config);
+        REQUIRE(v.has_value());
+        CHECK(ude::lint_common(*v).empty());
+        if (p.protocol == Protocol::Uac2)
+            CHECK(uac2::lint_uac2(*v, snap.config).empty());
+    }
+}
+
+TEST_CASE("uac1 profile fields propagate to snapshot") {
+    auto p = load_profile("profiles/uac1-cmedia-sim.json");
+    CHECK(p.protocol == Protocol::Uac1);
+    CHECK(p.vid == 0x0D8C);
+    CHECK(p.volMin == -6144); // -24dB × 256
+    auto snap = build_snapshot(p);
+    CHECK(snap.dev.idVendor == 0x0D8C);
+    CHECK(snap.dev.idProduct == 0x0103);
+    CHECK(snap.ac.volRes == 256);
+    auto enc = desc::encode_device_desc(snap.dev);
+    CHECK(enc[0] == 0x12);
+}
+
+TEST_CASE("uac2-hid-headset enables hid and adjusts volume range") {
+    auto p = load_profile("profiles/uac2-hid-headset.json");
+    CHECK(p.hidConsumerVolume);
+    CHECK(p.volRes == 512); // 2dB × 256
+    auto snap = build_snapshot(p);
+    CHECK(snap.hidConsumerVolume);
+    // UAC2 + HID：接口数 4（AC+2AS+HID）
+    auto v = desc::parse_config(snap.config);
+    REQUIRE(v.has_value());
+    CHECK(v->bNumInterfaces == 4);
+}
+
+TEST_CASE("invalid json and fields raise ProfileError") {
+    CHECK_THROWS_AS(parse_profile_json("not json", "x"), ProfileError);
+    CHECK_THROWS_AS(parse_profile_json(R"({"protocol":"uac3"})", "x"), ProfileError);
+    CHECK_THROWS_AS(parse_profile_json(R"({"audio":{}})", "x"), ProfileError); // 缺 protocol
+    CHECK_THROWS_AS(parse_profile_json(
+        R"({"protocol":"uac1","usb":{"vid":"0xZZ"}})", "x"), ProfileError);
+    CHECK_THROWS_AS(parse_profile_json(
+        R"({"protocol":"uac1","audio":{"volumeDb":{"min":0,"max":0}}})", "x"), ProfileError);
+    CHECK_THROWS_AS(parse_profile_json(
+        R"({"protocol":"uac1","rawConfigOverride":"09 02 0"})", "x"), ProfileError);
+    CHECK_THROWS_AS(load_profile("profiles/does-not-exist.json"), ProfileError);
+}
+
+TEST_CASE("raw override replaces config descriptor") {
+    // 黄金 C-Media 116B 作为 raw 覆盖
+    const std::string hex =
+        "09 02 74 00 02 01 00 80 FA 09 04 00 00 00 01 01"
+        "00 00 09 24 01 00 01 2B 00 01 01 0C 24 02 01 01"
+        "01 00 02 03 00 00 00 0D 24 06 0D 01 02 01 02 02"
+        "00 02 00 00 09 24 03 03 01 03 00 0D 00 09 04 01"
+        "00 00 01 02 00 00 09 04 01 01 01 01 02 00 00 07"
+        "24 01 01 01 01 00 0E 24 02 01 02 02 10 02 44 AC"
+        "00 80 BB 00 09 05 06 09 C0 00 01 00 00 07 25 01"
+        "01 00 00 00";
+    auto p = parse_profile_json(
+        R"({"protocol":"uac1","rawConfigOverride":")" + hex + "\"}", "raw-test");
+    auto snap = build_snapshot(p);
+    REQUIRE(snap.config.size() == 116);
+    // UDE 适配后 interval 变 4
+    CHECK(snap.config[106] == 4);
+    auto v = desc::parse_config(snap.config);
+    REQUIRE(v.has_value());
+}
+
+TEST_CASE("snapshot diff drives reattach decision") {
+    auto a = build_snapshot(load_profile("profiles/uac1-cmedia-sim.json"));
+    auto b = build_snapshot(load_profile("profiles/uac2-48k.json"));
+    auto c = build_snapshot(load_profile("profiles/uac1-cmedia-sim.json"));
+    CHECK(snapshot_requires_reattach(a, b));
+    CHECK_FALSE(snapshot_requires_reattach(a, c));
+}
+
+TEST_CASE("string hex vid with 0x prefix and decimal both parse") {
+    auto p1 = parse_profile_json(R"({"protocol":"uac1","usb":{"vid":305,"pid":259}})", "d");
+    CHECK(p1.vid == 305);
+    CHECK(p1.pid == 259);
+    auto p2 = parse_profile_json(R"({"protocol":"uac1","usb":{"vid":"0x1D50","pid":"0x6222"}})", "h");
+    CHECK(p2.vid == 0x1D50);
+    CHECK(p2.pid == 0x6222);
+}

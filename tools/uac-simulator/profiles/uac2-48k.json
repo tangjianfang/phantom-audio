@@ -1,0 +1,23 @@
+{
+  "protocol": "uac2",
+  "usb": {
+    "vid": "0x1D50",
+    "pid": "0x6222",
+    "bcdDevice": "0x0100",
+    "manufacturer": "Phantom Audio Labs",
+    "product": "UAC2 Simulator 48k",
+    "serial": "PASIM-0001"
+  },
+  "audio": {
+    "channels": 2,
+    "rates": [44100, 48000, 96000],
+    "subslot": 4,
+    "bits": 32,
+    "volumeDb": { "min": -24.0, "max": 0.0, "res": 1.0 },
+    "micIn": true,
+    "spkOut": true,
+    "acInterruptEp": true,
+    "feedbackEp": true
+  },
+  "hid": { "consumerVolume": false }
+}
