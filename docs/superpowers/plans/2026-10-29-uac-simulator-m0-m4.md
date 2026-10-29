@@ -38,7 +38,7 @@
 **Interfaces:**
 - Produces: 构建系统（preset `win-x64-debug`/`win-x64-release`，测试目标 `uac_tests`）；后续所有任务向此 CMake 追加目标。
 
-- [ ] **Step 1: 写目录与 CMake**
+- [x] **Step 1: 写目录与 CMake**
 
 `tools/uac-simulator/CMakeLists.txt`：
 
@@ -82,7 +82,7 @@ add_test(NAME uac_tests COMMAND uac_tests)
 }
 ```
 
-- [ ] **Step 2: 写冒烟测试**
+- [x] **Step 2: 写冒烟测试**
 
 `tests/test_smoke.cpp`：
 
@@ -96,18 +96,18 @@ TEST_CASE("version") { CHECK(uac::kVersion[0] == 'v'); }
 
 配套 `include/uac/version.h`：`#pragma once` + `namespace uac { inline constexpr char kVersion[] = "v0.1.0-m1"; }`
 
-- [ ] **Step 3: 构建+运行验证**
+- [x] **Step 3: 构建+运行验证**
 
 ```bash
 cd tools/uac-simulator && cmake --preset win-x64-debug && cmake --build --preset win-x64-debug && ctest --preset win-x64-debug
 ```
 预期：构建成功，1 test PASS。
 
-- [ ] **Step 4: envcheck 脚本**
+- [x] **Step 4: envcheck 脚本**
 
 `scripts/envcheck.ps1`：输出 cmake/ninja/cl 版本、是否管理员、HypervisorPresent、C 盘剩余 GB、vhci 服务 `usbip2_ude` 是否存在、`Get-VMSwitch` 是否可用（try/catch）。纯只读，非提权可跑。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/uac-simulator
@@ -134,7 +134,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
   - `std::vector<u8> encode_devlist_reply(const std::vector<UsbIpDevice>&)`、`std::optional<ImportRequest> decode_import_req(span<const u8>)`、`std::vector<u8> encode_import_reply(const UsbIpDevice&, u32 status)`、`usize decode_urb_header(span<const u8>, BasicHeader&, CmdSubmit&)`（返回消费字节数）
   - `endian.h`：`rd_le<T>(p)/wr_le<T>(p,v)` 显式小端助手
 
-- [ ] **Step 1: 写失败测试（往返 + 尺寸 + 字节级常量）**
+- [x] **Step 1: 写失败测试（往返 + 尺寸 + 字节级常量）**
 
 `tests/test_usbip_proto.cpp` 核心断言：
 
@@ -161,17 +161,17 @@ TEST_CASE("urb header decode") {
 
 （黄金字节集在测试文件内以 `const u8 GOLDEN_DEVLIST[] = {...}` 全量写出，构造函数 `make_cmedia()` 返回 issue #35 中 C-Media 0D8C:0103 的 UsbIpDevice。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 `cmake --build --preset win-x64-debug && ctest --preset win-x64-debug` → 链接错误（实现不存在）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `endian.h`：模板 `rd_le/wr_le` 用 `memcpy` + 无符号移位（不依赖主机序）。`usbip_proto.h/.cpp`：所有编码走 `wr_le` 逐字段写入 `std::vector<u8>`；**操作码/版本号前 8 字节（版本 0x0111、操作码、状态）按大端，正文结构体按小端**（kernel usbip_common.h 惯例：`usbip_header` 以 `#pragma pack(1)` 直传，x86 LE；OP_* 控制包用 `be32`）。`kUrbHeaderSize=52`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
-- [ ] **Step 5: Commit** `feat: USB/IP v1.1.1 协议编解码层（小端助手+黄金字节测试）`
+- [x] **Step 5: Commit** `feat: USB/IP v1.1.1 协议编解码层（小端助手+黄金字节测试）`
 
 ---
 
@@ -188,8 +188,8 @@ TEST_CASE("urb header decode") {
   - `class UsbIpServer { public: bool start(u16 port, UrbDispatcher&); void stop(); bool attached() const; }`（单设备单连接模型：一次 IMPORT 后只服务该连接直到 RET_UNLINK/断开）
 - Consumes: Task 2 编解码。
 
-- [ ] **Step 1: 失败测试** —— fake vhci 客户端（测试内用 winsock 直连）：连接 → 发 OP_REQ_DEVLIST → 断言收到 1 设备 → 发 OP_REQ_IMPORT(busid) → 断言 status=0 → 发 CMD_SUBMIT(ep0 GET_DESCRIPTOR device, seqnum=1) → dispatcher 假实现立即 complete(RetSubmit{0,18,...}+18B 描述符) → 客户端断言收到 RET_SUBMIT 且 payload 为设备描述符 → 服务端 on_detach 被调。全部在 `127.0.0.1:3240`，端口可注入避免冲突。
-- [ ] **Step 2: 确认失败** → **Step 3: 实现**（每连接一条 `std::jthread`，收满 48B 头再按 `transfer_buffer_length+number_of_packets*4` 收 payload/iso 描述符；`on_urb` 后台化不阻塞读线程；UNLINK 支持取消挂起完成项）→ **Step 4: 通过** → **Step 5: Commit** `feat: USB/IP server 传输层（导入握手+URB 分发+回环测试）`
+- [x] **Step 1: 失败测试** —— fake vhci 客户端（测试内用 winsock 直连）：连接 → 发 OP_REQ_DEVLIST → 断言收到 1 设备 → 发 OP_REQ_IMPORT(busid) → 断言 status=0 → 发 CMD_SUBMIT(ep0 GET_DESCRIPTOR device, seqnum=1) → dispatcher 假实现立即 complete(RetSubmit{0,18,...}+18B 描述符) → 客户端断言收到 RET_SUBMIT 且 payload 为设备描述符 → 服务端 on_detach 被调。全部在 `127.0.0.1:3240`，端口可注入避免冲突。
+- [x] **Step 2: 确认失败** → **Step 3: 实现**（每连接一条 `std::jthread`，收满 48B 头再按 `transfer_buffer_length+number_of_packets*4` 收 payload/iso 描述符；`on_urb` 后台化不阻塞读线程；UNLINK 支持取消挂起完成项）→ **Step 4: 通过** → **Step 5: Commit** `feat: USB/IP server 传输层（导入握手+URB 分发+回环测试）`
 
 ---
 
@@ -203,8 +203,8 @@ TEST_CASE("urb header decode") {
 **Interfaces:**
 - Produces: `namespace uac::desc`：`struct DeviceDesc{u16 bcdUSB=0x110;u16 vid,pid,bcdDevice;u8 maxPacket0=8;u8 iManufacturer,iProduct,iSerial;}`；`struct EndpointDesc{u8 address,attributes;u16 maxPacketSize;u8 interval;}`；`class Builder{ void bytes(span<const u8>); Builder& device(const DeviceDesc&); Builder& config(...); Builder& interface_(...); Builder& endpoint(...); Builder& cs_interface(span<const u8>); std::vector<u8> build(); }`；`std::optional<ConfigView> parse_config(span<const u8>)`（用于 lint 与热切换 diff）；字符串描述符 UTF-16LE 编码 `std::vector<u8> string_desc(std::string_view)`
 
-- [ ] **Step 1: 失败测试** —— 黄金配置描述符：把 issue #35 中 C-Media 116 字节 dump 写成 `constexpr u8 GOLDEN_CMEDIA_CFG[116]`（计划附录 A），`parse_config` 断言 2 接口/AC 43B/AS alt1 含 EP 0x06 iso-out wMaxPacketSize 192 bInterval 1；`Builder` 重新拼装出字节相等的数组。UTF-16LE 字符串 "A" → `03 01 41 00`。
-- [ ] **Step 2-5: 失败→实现→通过→Commit** `feat: USB 描述符构建/解析库（C-Media 黄金字节对齐）`
+- [x] **Step 1: 失败测试** —— 黄金配置描述符：把 issue #35 中 C-Media 116 字节 dump 写成 `constexpr u8 GOLDEN_CMEDIA_CFG[116]`（计划附录 A），`parse_config` 断言 2 接口/AC 43B/AS alt1 含 EP 0x06 iso-out wMaxPacketSize 192 bInterval 1；`Builder` 重新拼装出字节相等的数组。UTF-16LE 字符串 "A" → `03 01 41 00`。
+- [x] **Step 2-5: 失败→实现→通过→Commit** `feat: USB 描述符构建/解析库（C-Media 黄金字节对齐）`
 
 ### Task 5: UAC1 模板 + UDE 适配层 + 约束 lint
 
@@ -218,8 +218,8 @@ TEST_CASE("urb header decode") {
   - `ude_adapter.h`：`void adapt_for_ude(std::vector<u8>& cfg)` —— 遍历 EP 描述符：iso/int EP `interval = std::max<u8>(4, interval)`（HS 微帧语义下 ≥4 ⇒ ≥1ms）；`DeviceDesc adapt_device_for_ude(DeviceDesc)`（保持 bcdUSB 0x110，usbip 报告 speed=high）
   - `std::vector<LintError> lint_uac1(std::vector<u8> cfg)` —— 规则见测试
 
-- [ ] **Step 1: 失败测试** —— (a) adapt_for_ude(黄金 C-Media cfg) 后 EP interval==4 且其余字节不变；(b) lint 用例：alt0 有端点→错、FU Volume 未声明→错、正常模板→0 错；(c) build_uac1_config 产物 parse 后拓扑完整（1 AC + 2 AS，FU 双通道 bmaControls）。
-- [ ] **Step 2-5** → Commit `feat: UAC1 模板 + UDE 适配（bInterval>=4）+ lint`
+- [x] **Step 1: 失败测试** —— (a) adapt_for_ude(黄金 C-Media cfg) 后 EP interval==4 且其余字节不变；(b) lint 用例：alt0 有端点→错、FU Volume 未声明→错、正常模板→0 错；(c) build_uac1_config 产物 parse 后拓扑完整（1 AC + 2 AS，FU 双通道 bmaControls）。
+- [x] **Step 2-5** → Commit `feat: UAC1 模板 + UDE 适配（bInterval>=4）+ lint`
 
 ### Task 6: AudioControl 处理器（Volume/Mute/日志/STALL 注入点）
 
@@ -233,8 +233,8 @@ TEST_CASE("urb header decode") {
   - 覆盖：标准 GET_DESCRIPTOR(device/config/string)、UAC1 FU SET_CUR/GET_CUR/GET_MIN/MAX/RES（Volume/Mute）、端点 SET_CUR/GET_CUR 采样率、无效请求→Stall；每条请求写入 `LogStore`（NDJSON 行：`{ts,dir,ep,bmRequestType,bRequest,wValue,wIndex,wLength,resp,data}`）
   - `class LogStore { void append(std::string_view ndjsonLine); std::vector<std::string> tail(size_t n); size_t count(); void clear(); }`（内存环形 + 可选文件 sink）
 
-- [ ] **Step 1: 失败测试** —— SET_CUR(vol=-30.00dB=-7680? 用 -2560=-10dB) → GET_CUR 相等；GET_MIN/MAX/RES 黄金字节（little-endian i16 对）；Mute SET_CUR(1)→GET_CUR=={1}；采样率 SET_CUR(0xBB80)→GET_CUR=={80 BB 00}；stall case: bRequest=0x77 → Stall。
-- [ ] **Step 2-5** → Commit `feat: AC 处理器（音量/静音/采样率 + NDJSON 日志）`
+- [x] **Step 1: 失败测试** —— SET_CUR(vol=-30.00dB=-7680? 用 -2560=-10dB) → GET_CUR 相等；GET_MIN/MAX/RES 黄金字节（little-endian i16 对）；Mute SET_CUR(1)→GET_CUR=={1}；采样率 SET_CUR(0xBB80)→GET_CUR=={80 BB 00}；stall case: bRequest=0x77 → Stall。
+- [x] **Step 2-5** → Commit `feat: AC 处理器（音量/静音/采样率 + NDJSON 日志）`
 
 ### Task 7: 虚拟微帧时钟 + AS 引擎（pacing/打包/解包/feedback）
 
@@ -250,8 +250,8 @@ TEST_CASE("urb header decode") {
   - OUT：按 iso 包切分累计写入 WAV（16bit PCM header 修正式写法）；Stats `{u64 inBytes,outBytes,underruns,overruns}`。
   - feedback（M2 用，本任务实现数值层）：`u32 fb_value_12_13(u32 rateNominal, i32 ppmDrift)`。
 
-- [ ] **Step 1: 失败测试** —— (a) 打包器：48k/stereo/16bit、10 包请求 → 每包 24 slots=48B? no——48k*2ch*2B/8000µframes? 计算黄金：每微帧 12 samples*2ch*2B=48B，但 UAC1 HS bInterval=4 → 每 1ms 8 微帧只在第 1 微帧传 192B（单包/间隔）→ 断言 10 包 × 192B；(b) WAV：写 3 组 OUT 包后 dump 与 `tests/data/expected_sine48k.wav`（生成脚本在测试内自产自比对 RIFF 结构与 PCM 字节）一致；(c) pacing：注入时钟，`on_iso_in` 立即回调必须未发生，`advance_to(deadline)` 后恰好发生一次（同步条件变量等待）。
-- [ ] **Step 2-5** → Commit `feat: AS 引擎（微帧时钟 pacing + IN/OUT 流 + WAV）`
+- [x] **Step 1: 失败测试** —— (a) 打包器：48k/stereo/16bit、10 包请求 → 每包 24 slots=48B? no——48k*2ch*2B/8000µframes? 计算黄金：每微帧 12 samples*2ch*2B=48B，但 UAC1 HS bInterval=4 → 每 1ms 8 微帧只在第 1 微帧传 192B（单包/间隔）→ 断言 10 包 × 192B；(b) WAV：写 3 组 OUT 包后 dump 与 `tests/data/expected_sine48k.wav`（生成脚本在测试内自产自比对 RIFF 结构与 PCM 字节）一致；(c) pacing：注入时钟，`on_iso_in` 立即回调必须未发生，`advance_to(deadline)` 后恰好发生一次（同步条件变量等待）。
+- [x] **Step 2-5** → Commit `feat: AS 引擎（微帧时钟 pacing + IN/OUT 流 + WAV）`
 
 ### Task 8: 设备状态机整合 + uacsimd v0 端到端（无驱动回环验收）
 
@@ -264,8 +264,8 @@ TEST_CASE("urb header decode") {
   - `class DeviceModel : public UrbDispatcher { DeviceModel(const DeviceSnapshot&); }`，`DeviceSnapshot{ DeviceDesc dev; std::vector<u8> config; std::map<u8,std::vector<u8>> strings; AcState ac; }`
   - 状态机：ep0 → AcProcessor；interface alt SET_INTERFACE / GET_INTERFACE；iso EP → AsEngine；中断 EP →（M2 EventInjector 预留槽位）；RET_UNLINK/断开 → 状态复位
   - `uacsimd main`：`--profile <json|preset>`（本任务仅内置 preset `uac1-cmedia-sim`）、`--port 3240`、`--log-file <path>`、`--console`（阻塞日志打印）
-- [ ] **Step 1: 失败测试（端到端回环剧本）** —— fake-vhci 客户端执行完整剧本：DEVLIST→IMPORT→GET_DESCRIPTOR(device)→GET_DESCRIPTOR(config)→SET_CONFIGURATION(1)→SET_INTERFACE(1,1)→10×CMD_SUBMIT(iso OUT 192B×10)→GET_CUR(vol)→SET_CUR(vol)→GET_CUR→断言日志 count==预期、RET_SUBMIT 顺序/seqnum 严格匹配、WAV 落盘 10ms 音频。
-- [ ] **Step 2-5** → Commit `feat: 设备状态机整合 + uacsimd v0 回环验收（M1 代码侧完成）`
+- [x] **Step 1: 失败测试（端到端回环剧本）** —— fake-vhci 客户端执行完整剧本：DEVLIST→IMPORT→GET_DESCRIPTOR(device)→GET_DESCRIPTOR(config)→SET_CONFIGURATION(1)→SET_INTERFACE(1,1)→10×CMD_SUBMIT(iso OUT 192B×10)→GET_CUR(vol)→SET_CUR(vol)→GET_CUR→断言日志 count==预期、RET_SUBMIT 顺序/seqnum 严格匹配、WAV 落盘 10ms 音频。
+- [x] **Step 2-5** → Commit `feat: 设备状态机整合 + uacsimd v0 回环验收（M1 代码侧完成）`
 
 ---
 

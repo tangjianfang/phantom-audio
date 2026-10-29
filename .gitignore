@@ -24,8 +24,8 @@ logs/
 third_party/usbip-win2/*.exe
 third_party/usbip-win2/*.msi
 third_party/usbip-win2/*.zip
-scripts/m0/id_m0
-scripts/m0/id_m0.pub
-scripts/m0/*.iso
-scripts/m0/*.pcap
+tools/uac-simulator/scripts/m0/id_m0
+tools/uac-simulator/tools/uac-simulator/scripts/m0/id_m0.pub
+tools/uac-simulator/scripts/m0/*.iso
+tools/uac-simulator/scripts/m0/*.pcap
 
