@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
   # /W4 高警告; /utf-8 统一源码编码; /MP 并行编译
   add_compile_options(/W4 /permissive- /Zc:preprocessor /utf-8 /MP)
+  # 静态链接 CRT（/MT、Debug 为 /MTd）：产物不依赖 VC++ Redistributable，免安装运行库
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # ---------------- 核心静态库 ----------------
@@ -74,6 +76,9 @@ target_link_libraries(uacsim PRIVATE ws2_32)
 add_executable(host_probe apps/host_probe/main.cpp)
 target_link_libraries(host_probe PRIVATE uac_core ole32)
 
-add_executable(uacstudio WIN32 apps/uacstudio/main.cpp)
-target_link_libraries(uacstudio PRIVATE ws2_32 comctl32)
+add_executable(uacstudio WIN32
+  apps/uacstudio/main.cpp
+  apps/uacstudio/env_check.cpp
+)
+target_link_libraries(uacstudio PRIVATE ws2_32 comctl32 advapi32 shell32)
 set_target_properties(uacstudio PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup")

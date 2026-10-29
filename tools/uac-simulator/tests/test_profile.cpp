@@ -13,13 +13,21 @@ std::string write_tmp(const char* name, const std::string& content) {
     f << content;
     return path;
 }
+// profiles 目录自定位：源码树运行（cwd=tools/uac-simulator）或 ctest（cwd=build/*）
+std::string profile_path(const char* name) {
+    for (const char* base : {"profiles/", "../../profiles/", "../../../profiles/"}) {
+        std::string p = std::string(base) + name;
+        std::ifstream f(p);
+        if (f.good()) return p;
+    }
+    return std::string("profiles/") + name; // 让 load_profile 报出清晰错误
+}
 } // namespace
 
 TEST_CASE("built-in profiles load and build valid snapshots") {
-    const char* files[] = {"profiles/uac1-cmedia-sim.json", "profiles/uac2-48k.json",
-                           "profiles/uac2-hid-headset.json"};
+    const char* files[] = {"uac1-cmedia-sim.json", "uac2-48k.json", "uac2-hid-headset.json"};
     for (auto* f : files) {
-        auto p = load_profile(f);
+        auto p = load_profile(profile_path(f));
         CAPTURE(f);
         auto snap = build_snapshot(p);
         auto v = desc::parse_config(snap.config);
@@ -31,7 +39,7 @@ TEST_CASE("built-in profiles load and build valid snapshots") {
 }
 
 TEST_CASE("uac1 profile fields propagate to snapshot") {
-    auto p = load_profile("profiles/uac1-cmedia-sim.json");
+    auto p = load_profile(profile_path("uac1-cmedia-sim.json"));
     CHECK(p.protocol == Protocol::Uac1);
     CHECK(p.vid == 0x0D8C);
     CHECK(p.volMin == -6144); // -24dB × 256
@@ -44,7 +52,7 @@ TEST_CASE("uac1 profile fields propagate to snapshot") {
 }
 
 TEST_CASE("uac2-hid-headset enables hid and adjusts volume range") {
-    auto p = load_profile("profiles/uac2-hid-headset.json");
+    auto p = load_profile(profile_path("uac2-hid-headset.json"));
     CHECK(p.hidConsumerVolume);
     CHECK(p.volRes == 512); // 2dB × 256
     auto snap = build_snapshot(p);
@@ -90,9 +98,9 @@ TEST_CASE("raw override replaces config descriptor") {
 }
 
 TEST_CASE("snapshot diff drives reattach decision") {
-    auto a = build_snapshot(load_profile("profiles/uac1-cmedia-sim.json"));
-    auto b = build_snapshot(load_profile("profiles/uac2-48k.json"));
-    auto c = build_snapshot(load_profile("profiles/uac1-cmedia-sim.json"));
+    auto a = build_snapshot(load_profile(profile_path("uac1-cmedia-sim.json")));
+    auto b = build_snapshot(load_profile(profile_path("uac2-48k.json")));
+    auto c = build_snapshot(load_profile(profile_path("uac1-cmedia-sim.json")));
     CHECK(snapshot_requires_reattach(a, b));
     CHECK_FALSE(snapshot_requires_reattach(a, c));
 }

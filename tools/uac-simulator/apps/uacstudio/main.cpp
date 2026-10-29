@@ -4,6 +4,7 @@
 //   Segoe UI（句首大写标签）+ Cascadia Mono（日志/数据）；
 //   布局：顶部设备状态条（LED+标题，全窗唯一强调处）→ 分组标签 → 键帽网格 → 日志满铺。
 #include "http_client.h"
+#include "env_check.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -51,7 +52,7 @@ struct Ctl {
 };
 
 Ctl g_led, g_title, g_sub;
-Ctl g_profileCombo, g_attachBtn, g_detachBtn;
+Ctl g_profileCombo, g_attachBtn, g_detachBtn, g_envBtn;
 Ctl g_lblInject, g_btnVolUp, g_btnVolDown, g_btnMute, g_btnHidUp, g_btnHidDown, g_btnHidMute;
 Ctl g_btnHidRel, g_btnStall, g_btnDelay, g_btnDisconnect, g_btnClear;
 Ctl g_lblStream, g_hzEdit, g_btnSine, g_btnSilence, g_capEdit, g_btnCapStart, g_btnCapStop;
@@ -107,8 +108,10 @@ int LayoutSections(int W) {
                Scale(g_main, 22), TRUE);
     MoveWindow(g_sub.wnd, m + Scale(g_main, 36), y + Scale(g_main, 25), Scale(g_main, 400),
                Scale(g_main, 16), TRUE);
-    MoveWindow(g_profileCombo.wnd, W - m - Scale(g_main, 368), y + Scale(g_main, 9),
-               Scale(g_main, 178), Scale(g_main, 200), TRUE);
+    MoveWindow(g_profileCombo.wnd, W - m - Scale(g_main, 452), y + Scale(g_main, 9),
+               Scale(g_main, 158), Scale(g_main, 200), TRUE);
+    MoveWindow(g_envBtn.wnd, W - m - Scale(g_main, 284), y + Scale(g_main, 8),
+               Scale(g_main, 96), Scale(g_main, 28), TRUE);
     MoveWindow(g_attachBtn.wnd, W - m - Scale(g_main, 182), y + Scale(g_main, 8),
                Scale(g_main, 86), Scale(g_main, 28), TRUE);
     MoveWindow(g_detachBtn.wnd, W - m - Scale(g_main, 90), y + Scale(g_main, 8),
@@ -191,6 +194,8 @@ void RefreshLog() {
     SendMessageA(g_logEdit.wnd, EM_SETSEL, r.size() - 1, r.size() - 1);
 }
 
+void SetEnabled(bool on) { EnableWindow(g_main, on ? TRUE : FALSE); }
+
 void Post(const std::string& path, const std::string& body, const char* what) {
     std::string out;
     if (uacstudio::http_post(g_port, path, body, &out))
@@ -224,6 +229,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         SendMessageW(g_profileCombo.wnd, CB_SETCURSEL, 0, 0);
         g_attachBtn.create(h, 101, L"BUTTON", L"Attach", key, 0, cs->hInstance, g_fUi);
         g_detachBtn.create(h, 102, L"BUTTON", L"Detach", key, 0, cs->hInstance, g_fUi);
+        g_envBtn.create(h, 910, L"BUTTON", L"环境检查", key, 0, cs->hInstance, g_fUi);
         g_lblInject.create(h, 903, L"STATIC", L"设备侧事件与故障注入", vis, 0, cs->hInstance,
                            g_fUi);
         g_btnVolUp.create(h, 200, L"BUTTON", L"音量 +", key, 0, cs->hInstance, g_fUi);
@@ -323,6 +329,12 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         switch (id) {
         case 101: Post("/attach", "{\"profile\":\"" + CurrentProfile() + "\"}", "attach"); break;
         case 102: Post("/detach", "", "detach"); break;
+        case 910:
+            SetEnabled(false);
+            uacstudio::ShowEnvCheck(h, g_port);
+            SetEnabled(true);
+            RefreshStatus();
+            break;
         case 200: Post("/event", "{\"type\":\"volume_up\"}", "音量+"); break;
         case 201: Post("/event", "{\"type\":\"volume_down\"}", "音量-"); break;
         case 202: Post("/event", "{\"type\":\"mute\"}", "静音"); break;
@@ -407,6 +419,11 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nCmdShow) {
                              CW_USEDEFAULT, CW_USEDEFAULT, 880, 640, nullptr, nullptr, hi,
                              nullptr);
     ShowWindow(g_main, nCmdShow);
+    UpdateWindow(g_main);
+    if (uacstudio::IsFirstRun()) {
+        uacstudio::ShowEnvCheck(g_main, g_port);
+        RefreshStatus();
+    }
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
