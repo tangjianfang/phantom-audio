@@ -21,3 +21,11 @@ Testing/
 *.etl
 *.wav
 logs/
+third_party/usbip-win2/*.exe
+third_party/usbip-win2/*.msi
+third_party/usbip-win2/*.zip
+scripts/m0/id_m0
+scripts/m0/id_m0.pub
+scripts/m0/*.iso
+scripts/m0/*.pcap
+

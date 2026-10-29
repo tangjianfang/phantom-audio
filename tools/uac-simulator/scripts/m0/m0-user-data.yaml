@@ -1,0 +1,70 @@
+#cloud-config
+# M0 探针 VM —— Ubuntu Server 24.04 unattended（autoinstall + NoCloud seed）
+# 登录：ssh -i scripts/m0/id_m0 uac@<vm-ip>（密码字段为占位哈希，仅密钥登录）
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: uac-m0
+    username: uac
+    # 占位哈希（密钥登录为主）
+    password: "$6$rounds=4096$uacm0$J8Z1xQ3fVb0mN2yK5tR7wE9sH4uD6pA1cX0zL8vB3nM5jC7qG2iT4eS6hU8kD0wF"
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZms4Cw92zJmriFXWHBz7cevd7y6jINmkK/VIfQyqkN uac-m0
+  storage:
+    layout:
+      name: direct
+  packages:
+    - tcpdump
+    - linux-modules-extra-generic
+    - linux-tools-generic
+    - linux-tools-virtual
+  late_commands:
+    # 00: gadget 配置脚本（内联写入，幂等，输出日志 /var/log/m0-gadget.log）
+    - curtin in-target -- bash -c "cat > /target/usr/local/sbin/m0-gadget-setup.sh <<'EOS'
+#!/bin/sh
+exec > /var/log/m0-gadget.log 2>&1
+set -x
+modprobe usbip_core
+modprobe usbip-vudc 2>/dev/null || modprobe usbip_vudc
+modprobe libcomposite
+UDC_NAME=\$(ls /sys/class/udc | grep -i usbip | head -1)
+[ -z \"\$UDC_NAME\" ] && { echo NO_UDC; exit 1; }
+G=/sys/kernel/config/usb_gadget/g1
+[ -d \"\$G\" ] && exit 0
+mkdir -p \"\$G\" && cd \"\$G\"
+echo 0x1d6b > idVendor
+echo 0x0104 > idProduct
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+mkdir -p strings/0x409 configs/b.1/strings/0x409 functions/uac2.0
+echo M0-PROBE > strings/0x409/manufacturer
+echo UAC2-fuac2 > strings/0x409/product
+echo M0000000001 > strings/0x409/serialnumber
+echo UAC2 > configs/b.1/strings/0x409/configuration
+echo 500 > configs/b.1/MaxPower
+ln -sf functions/uac2.0 configs/b.1/uac2.0
+echo \"\$UDC_NAME\" > UDC
+USBIPD=\$(ls /usr/lib/linux-tools/*/usbipd 2>/dev/null | head -1)
+[ -z \"\$USBIPD\" ] && USBIPD=usbipd
+\$USBIPD -D --device /sys/class/udc/\$UDC_NAME
+echo EXPORTED
+EOS
+chmod +x /target/usr/local/sbin/m0-gadget-setup.sh"
+    - curtin in-target -- bash -c "cat > /target/etc/systemd/system/m0-gadget.service <<'EOS'
+[Unit]
+Description=M0 usbip gadget export
+After=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/m0-gadget-setup.sh
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl enable m0-gadget.service"
