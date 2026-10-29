@@ -16,12 +16,12 @@ void AsEngine::set_auto_pump(bool on) {
     autoPump_.store(on);
     if (on && !pumpThreadStarted_) {
         pumpThreadStarted_ = true;
-        pumpThread_ = std::thread([this] {
+        pumpThread_ = std::thread([this] { // uac-cov:thread
             while (autoPump_.load()) {
                 pump();
                 std::mutex dummyMtx; // 仅用于 cv 超时等待载体
                 std::unique_lock<std::mutex> lk(dummyMtx);
-                cv_.wait_for(lk, std::chrono::microseconds(500),
+                cv_.wait_for(lk, std::chrono::microseconds(500), // uac-cov:thread
                              [this] { return !autoPump_.load(); });
             }
         });

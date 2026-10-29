@@ -56,12 +56,13 @@ struct UsbIpServer::Impl {
     UrbDispatcher* disp = nullptr;
     std::vector<usbip::UsbIpDevice> devices;
 
+    std::thread channelThread;           // URB 通道线程（与 accept 线程解耦）
     std::mutex send_mtx;                 // 串行化 data_sock 上的发送
     std::mutex cancel_mtx;               // 已取消（UNLINK）的 seqnum 集合
     std::set<uint32_t> cancelled;
     std::vector<unsigned char> io_buf;   // 复用缓冲
 
-    bool send_on_data(std::span<const unsigned char> a, std::span<const unsigned char> b = {},
+    bool send_on_data(std::span<const unsigned char> a, std::span<const unsigned char> b = {}, // uac-cov:thread
                       std::span<const unsigned char> c = {}) {
         std::lock_guard lk(send_mtx);
         SOCKET s = data_sock.load();
@@ -69,7 +70,7 @@ struct UsbIpServer::Impl {
         return send_all(s, a) && (b.empty() || send_all(s, b)) && (c.empty() || send_all(s, c));
     }
 
-    CompletionFn wrap_completion(uint32_t seqnum, CompletionFn&& complete) {
+    CompletionFn wrap_completion(uint32_t seqnum, CompletionFn&& complete) { // uac-cov:thread
         // UNLINK 抢先后静默丢弃 completion（协议要求：成功 RET_UNLINK 后不再有该 RET_SUBMIT）
         return [this, seqnum, cb = std::move(complete)](Completion&& cm) mutable {
             {
@@ -93,13 +94,11 @@ struct UsbIpServer::Impl {
         };
     }
 
-    UnlinkResultFn wrap_unlink(uint32_t seqnum, UnlinkResultFn&& done) {
+    UnlinkResultFn wrap_unlink(uint32_t seqnum, UnlinkResultFn&& done) { // uac-cov:thread
         return [this, seqnum, cb = std::move(done)](int32_t status) mutable {
-            std::vector<unsigned char> wire(usbip::kUrbHeaderSize, 0);
-            uac::wr_be<uint32_t>(wire.data() + 0, usbip::RET_UNLINK);
-            uac::wr_be<uint32_t>(wire.data() + 4, seqnum);
-            uac::wr_be<int32_t>(wire.data() + 20, status);
-            send_on_data(wire);
+            usbip::BasicHeader req{};
+            req.seqnum = seqnum;
+            send_on_data(usbip::encode_ret_unlink(req, status));
             cb = {};
         };
     }
@@ -140,19 +139,24 @@ struct UsbIpServer::Impl {
                 attached.store(true);
                 is_data = true;
                 disp->on_import(*found);
-                urb_loop(s); // 直至连接关闭
-                attached.store(false);
-                data_sock.store(INVALID_SOCKET);
-                {
-                    std::lock_guard lk(cancel_mtx);
-                    cancelled.clear();
-                }
-                disp->on_detach();
-                break;
+                // URB 通道移交独立线程：accept 线程继续服务并发连接（DEVLIST/重复 IMPORT）
+                if (channelThread.joinable()) channelThread.join(); // 上一通道已结束（attached=false）
+                channelThread = std::thread([this, s] { // uac-cov:thread
+                    urb_loop(s);
+                    attached.store(false);
+                    data_sock.store(INVALID_SOCKET);
+                    {
+                        std::lock_guard lk(cancel_mtx);
+                        cancelled.clear();
+                    }
+                    disp->on_detach();
+                    closesocket(s);
+                });
+                return; // 连接归 channel 线程所有
             }
             break; // 未知操作码
         }
-        if (s != INVALID_SOCKET) closesocket(s);
+        if (s != INVALID_SOCKET && !is_data) closesocket(s);
         (void)is_data;
     }
 
@@ -216,7 +220,7 @@ bool UsbIpServer::start(uint16_t port, UrbDispatcher& dispatcher,
     impl_->listener.store(ls);
     impl_->stopping.store(false); // 支持复用（stop→start 循环）
 
-    impl_->accept_thread = std::thread([this] {
+    impl_->accept_thread = std::thread([this] { // uac-cov:thread
         // Windows 上 closesocket 无法解除阻塞中的 accept()，用 select+短超时轮询退出标志
         for (;;) {
             if (impl_->stopping.load()) return;
@@ -246,6 +250,7 @@ void UsbIpServer::stop() {
     SOCKET ds = impl_->data_sock.exchange(INVALID_SOCKET);
     if (ds != INVALID_SOCKET) { shutdown(ds, SD_BOTH); closesocket(ds); }
     if (impl_->accept_thread.joinable()) impl_->accept_thread.join();
+    if (impl_->channelThread.joinable()) impl_->channelThread.join();
     SOCKET ls = impl_->listener.exchange(INVALID_SOCKET);
     if (ls != INVALID_SOCKET) { shutdown(ls, SD_BOTH); closesocket(ls); }
     impl_->attached.store(false);

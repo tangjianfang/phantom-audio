@@ -93,9 +93,9 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
         if (a.contains("feedbackEp")) p.feedbackEp = a.at("feedbackEp").get<bool>();
         if (a.contains("volumeDb")) {
             const auto& v = a.at("volumeDb");
-            const auto to256 = [](const json& x, double def) {
-                if (!x.is_number()) return static_cast<std::int16_t>(def);
-                return static_cast<std::int16_t>(x.get<double>() * 256.0);
+            const auto to256 = [](const json& x, double defaultDb) {
+                const double db = x.is_number() ? x.get<double>() : defaultDb;
+                return static_cast<std::int16_t>(db * 256.0);
             };
             p.volMin = to256(v.contains("min") ? v.at("min") : json(), -24.0);
             p.volMax = to256(v.contains("max") ? v.at("max") : json(), 0.0);

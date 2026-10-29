@@ -299,7 +299,7 @@ TEST_CASE("urb header decode") {
 - `std::vector<u8> build_uac2_config(const Uac2Profile&)`：bcdUSB 0x0200、IAD、AC（Header/CD1.x/ClockSource(bmControls freq RW)/IT/OT/FU 双通道）、每采样率一个 AS alt（alt0 零端点）+ 数据 iso EP + feedback iso IN EP(wMaxPacketSize=4,bInterval=4, FDF 12.13)
 - `lint_uac2`：单 ClockSource、alt0 零端点、升序、async OUT 必须有 feedback EP、bmFormats 单位、每 alt bTerminalLink 一致、bInterval≥4（UDE）
 
-- [ ] **Step 1: 失败测试** —— parse 黄金：7 个 AS alt（1+3×2 in/out? 以 profile=3 rates, mic+spk → AC + 2 AS 组）拓扑断言；lint 负例（删 feedback EP → 报错；双 ClockSource → 报错）。**Step 2-5** → Commit `feat: UAC2 模板（ClockSource/IAD/feedback EP）+ lint`
+- [x] **Step 1: 失败测试** —— parse 黄金：7 个 AS alt（1+3×2 in/out? 以 profile=3 rates, mic+spk → AC + 2 AS 组）拓扑断言；lint 负例（删 feedback EP → 报错；双 ClockSource → 报错）。**Step 2-5** → Commit `feat: UAC2 模板（ClockSource/IAD/feedback EP）+ lint`
 
 ### Task 11: 采样率协商（双协议）+ AcProcessor 扩展
 

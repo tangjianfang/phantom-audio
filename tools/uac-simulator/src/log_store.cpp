@@ -33,6 +33,8 @@ void LogStore::clear() {
 
 bool LogStore::set_file_sink(const std::string& path) {
     std::lock_guard lk(mtx_);
+    if (file_.is_open()) file_.close(); // close 触发 flush；已开流上 open 会失败
+    if (path.empty()) return false;
     file_.open(path, std::ios::app);
     return file_.is_open();
 }

@@ -52,6 +52,12 @@ public:
     Stats stats() const;
 
     void pump();                 // 处理到期完成项（幂等、线程安全）
+    // 测试钩子：直接驱动打包器（单测/覆盖率用）
+    std::vector<unsigned char> fill_packets_for_test(std::uint16_t nPackets,
+                                                     std::vector<usbip::IsoPacket>& isoOut) {
+        std::lock_guard lk(mtx_);
+        return fill_packets(nPackets, isoOut);
+    }
     bool cancel(std::uint32_t seqnum); // UNLINK：返回是否确有挂起项被取消
 
     // UAC2 feedback 端点数值（12.13 格式，Q12.13 每微帧采样数）

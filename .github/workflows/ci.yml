@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        working-directory: tools/uac-simulator
+        run: cmake --preset win-x64-debug
+
+      - name: Build
+        working-directory: tools/uac-simulator
+        run: cmake --build --preset win-x64-debug
+
+      - name: Test (L1 unit + L2 loopback scenarios)
+        working-directory: tools/uac-simulator
+        run: ctest --preset win-x64-debug --output-on-failure
+
+      - name: Release build sanity
+        working-directory: tools/uac-simulator
+        run: |
+          cmake --preset win-x64-release
+          cmake --build --preset win-x64-release
+
+      - name: Upload test binary artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uac-simulator-win-x64
+          path: |
+            tools/uac-simulator/build/release/*.exe
+          retention-days: 7

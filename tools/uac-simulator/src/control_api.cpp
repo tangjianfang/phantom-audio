@@ -182,7 +182,7 @@ bool ControlApi::start(std::uint16_t port, ControlCallbacks cb) {
         return false;
     }
     impl_->listener.store(ls);
-    impl_->acceptThread = std::thread([this] {
+    impl_->acceptThread = std::thread([this] { // uac-cov:thread
         for (;;) {
             if (impl_->stopping.load()) return;
             SOCKET ls = impl_->listener.load();

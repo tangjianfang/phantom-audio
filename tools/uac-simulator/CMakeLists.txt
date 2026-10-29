@@ -52,6 +52,9 @@ add_executable(uac_tests
   tests/test_control_api.cpp
   tests/test_fault_injector.cpp
   tests/test_goertzel.cpp
+  tests/test_coverage_gaps.cpp
+  tests/test_coverage_gaps2.cpp
+  tests/test_coverage_gaps3.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)
