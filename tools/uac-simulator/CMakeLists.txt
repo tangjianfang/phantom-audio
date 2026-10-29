@@ -21,6 +21,7 @@ add_library(uac_core STATIC
   src/ac_processor.cpp
   src/as_engine.cpp
   src/wav.cpp
+  src/device_model.cpp
 )
 target_include_directories(uac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_compile_definitions(uac_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -36,6 +37,11 @@ add_executable(uac_tests
   tests/test_desc_uac1.cpp
   tests/test_ac_processor.cpp
   tests/test_as_engine.cpp
+  tests/test_device_model_loopback.cpp
 )
 target_link_libraries(uac_tests PRIVATE uac_core ws2_32)
 add_test(NAME uac_tests COMMAND uac_tests)
+
+# ---------------- 应用 ----------------
+add_executable(uacsimd apps/uacsimd/main.cpp)
+target_link_libraries(uacsimd PRIVATE uac_core ws2_32)
