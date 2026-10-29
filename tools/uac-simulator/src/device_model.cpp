@@ -36,7 +36,8 @@ DeviceSnapshot make_uac2_default_snapshot() {
 
 DeviceModel::DeviceModel(DeviceSnapshot snap, std::unique_ptr<MicroframeClock> clock)
     : snap_(std::move(snap)), clock_(clock ? std::move(clock) : std::make_unique<WallClock>()),
-      ac_(snap_.ac, log_), engine_(*clock_, log_, snap_.stream) {
+      ac_(snap_.ac, log_), engine_(*clock_, log_, snap_.stream),
+      injector_(snap_.protocol == Protocol::Uac2 ? 6 : 2) {
     ac_.set_descriptors(desc::encode_device_desc(snap_.dev), snap_.config, snap_.strings,
                         snap_.qualifier);
     ac_.set_feature_unit_ids(snap_.featureUnitIds);
@@ -136,6 +137,18 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         engine_.on_iso_in(cmd, std::move(complete));
         return;
     }
+    if (epAddr == 0x81) { // AC 中断 IN（Status Word）：有挂起通知立即回，否则挂起
+        if (auto w = injector_.poll_interrupt_in()) {
+            Completion cm;
+            cm.ret.actual_length = static_cast<std::uint32_t>(w->size());
+            cm.payload = std::move(*w);
+            complete(std::move(cm));
+        } else {
+            std::lock_guard lk(mtx_);
+            heldInterrupts_.push_back({cmd.basic.seqnum, std::move(complete)});
+        }
+        return;
+    }
     if (epAddr == 0x06) { // 扬声器 iso OUT：立即确认 + 数据交引擎
         engine_.on_iso_out(payload, isoDescs);
         Completion cm;
@@ -159,8 +172,65 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
 
 void DeviceModel::on_unlink(std::uint32_t seqnum, std::uint32_t unlink_seqnum,
                             UnlinkResultFn done) {
+    { // 先取消挂起的中断提交
+        std::lock_guard lk(mtx_);
+        for (auto it = heldInterrupts_.begin(); it != heldInterrupts_.end(); ++it)
+            if (it->seqnum == unlink_seqnum) {
+                heldInterrupts_.erase(it);
+                done(-104);
+                return;
+            }
+    }
     if (engine_.cancel(unlink_seqnum)) done(-104); // -ECONNRESET
     else done(0); // 已完成
+}
+
+void DeviceModel::inject_volume_step(int steps) {
+    {
+        std::lock_guard lk(mtx_);
+        const auto res = snap_.ac.volRes == 0 ? 256 : snap_.ac.volRes;
+        auto v = snap_.ac.volCur[0] + static_cast<std::int16_t>(res * steps);
+        if (v < snap_.ac.volMin) v = snap_.ac.volMin;
+        if (v > snap_.ac.volMax) v = snap_.ac.volMax;
+        snap_.ac.volCur[0] = snap_.ac.volCur[1] = v;
+    }
+    injector_.volume_changed(snap_.featureUnitIds.empty() ? 2 : snap_.featureUnitIds[0]);
+    flush_held_interrupts();
+    log_.append(std::string("{\"event\":\"inject_volume\",\"steps\":") + std::to_string(steps) +
+                ",\"volCur\":" + std::to_string(snap_.ac.volCur[0]) + "}");
+}
+
+void DeviceModel::inject_mute_toggle() {
+    {
+        std::lock_guard lk(mtx_);
+        snap_.ac.mute[0] = !snap_.ac.mute[0];
+        snap_.ac.mute[1] = snap_.ac.mute[0];
+    }
+    injector_.mute_changed(snap_.featureUnitIds.empty() ? 2 : snap_.featureUnitIds[0]);
+    flush_held_interrupts();
+    log_.append(std::string("{\"event\":\"inject_mute\",\"mute\":") +
+                std::to_string(snap_.ac.mute[0] ? 1 : 0) + "}");
+}
+
+void DeviceModel::flush_held_interrupts() {
+    std::vector<HeldInt> toFire;
+    {
+        std::lock_guard lk(mtx_);
+        toFire = std::move(heldInterrupts_);
+        heldInterrupts_.clear();
+    }
+    for (auto& h : toFire) {
+        auto w = injector_.poll_interrupt_in();
+        if (!w) { // 通知已耗尽：重新挂起
+            std::lock_guard lk(mtx_);
+            heldInterrupts_.push_back(std::move(h));
+            continue;
+        }
+        Completion cm;
+        cm.ret.actual_length = static_cast<std::uint32_t>(w->size());
+        cm.payload = std::move(*w);
+        h.complete(std::move(cm));
+    }
 }
 
 std::uint8_t DeviceModel::interface_alt(std::uint8_t iface) const {

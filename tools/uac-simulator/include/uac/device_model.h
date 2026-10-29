@@ -6,6 +6,7 @@
 #include <uac/desc_uac1.h>
 #include <uac/desc_uac2.h>
 #include <uac/urb_dispatcher.h>
+#include <uac/event_injector.h>
 #include <uac/usbip_proto.h>
 #include <atomic>
 #include <map>
@@ -47,6 +48,11 @@ public:
                    UnlinkResultFn done) override;
     void on_detach() override;
 
+    // R6 事件注入（先改状态再入队 Status Word）
+    void inject_volume_step(int steps); // ±resDb 步进（正=音量+，负=音量-）
+    void inject_mute_toggle();
+    EventInjector& injector() { return injector_; }
+
     usbip::UsbIpDevice usbip_device() const; // 导出给 server 的设备清单
     std::uint8_t interface_alt(std::uint8_t iface) const;
     AcState ac_state() const;
@@ -67,6 +73,10 @@ private:
     AcProcessor ac_;
     AsEngine engine_;
     std::map<std::uint8_t, std::uint8_t> ifaceAlt_;
+    EventInjector injector_;
+    struct HeldInt { std::uint32_t seqnum; CompletionFn complete; };
+    std::vector<HeldInt> heldInterrupts_;
+    void flush_held_interrupts();
     std::atomic<bool> attached_{false};
     std::uint64_t imported_ = 0;
 };
