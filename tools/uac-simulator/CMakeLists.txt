@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(uac_simulator LANGUAGES CXX)
+project(uac_simulator LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -79,6 +79,7 @@ target_link_libraries(host_probe PRIVATE uac_core ole32)
 add_executable(uacstudio WIN32
   apps/uacstudio/main.cpp
   apps/uacstudio/env_check.cpp
+  apps/uacstudio/uacstudio.rc
 )
 target_link_libraries(uacstudio PRIVATE ws2_32 comctl32 advapi32 shell32)
 set_target_properties(uacstudio PROPERTIES LINK_FLAGS "/ENTRY:wWinMainCRTStartup")
