@@ -79,6 +79,7 @@ target_link_libraries(host_probe PRIVATE uac_core ole32)
 add_executable(uacstudio WIN32
   apps/uacstudio/main.cpp
   apps/uacstudio/env_check.cpp
+  apps/uacstudio/auto_test.cpp
   apps/uacstudio/uacstudio.rc
 )
 target_link_libraries(uacstudio PRIVATE ws2_32 comctl32 advapi32 shell32)

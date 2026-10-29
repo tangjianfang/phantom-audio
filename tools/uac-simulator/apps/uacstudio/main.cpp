@@ -5,6 +5,7 @@
 //   布局：顶部设备状态条（LED+标题，全窗唯一强调处）→ 分组标签 → 键帽网格 → 日志满铺。
 #include "http_client.h"
 #include "env_check.h"
+#include "auto_test.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -18,6 +19,10 @@
 #include <commctrl.h>
 #include <string>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -56,7 +61,11 @@ Ctl g_profileCombo, g_attachBtn, g_detachBtn, g_envBtn;
 Ctl g_lblInject, g_btnVolUp, g_btnVolDown, g_btnMute, g_btnHidUp, g_btnHidDown, g_btnHidMute;
 Ctl g_btnHidRel, g_btnStall, g_btnDelay, g_btnDisconnect, g_btnClear;
 Ctl g_lblStream, g_hzEdit, g_btnSine, g_btnSilence, g_capEdit, g_btnCapStart, g_btnCapStop;
-Ctl g_lblLog, g_logEdit;
+Ctl g_lblLog, g_logEdit, g_btnSelfTest;
+std::atomic<bool> g_testRunning{false};
+std::mutex g_lineMtx;
+std::vector<std::string> g_lines;
+constexpr UINT WM_APP_TESTLINE = WM_APP + 1;
 HWND g_main = nullptr;
 int g_ledState = 0; // 0 离线 1 监听 2 已导入
 
@@ -243,6 +252,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         g_btnDelay.create(h, 211, L"BUTTON", L"延迟注入", key, 0, cs->hInstance, g_fUi);
         g_btnDisconnect.create(h, 212, L"BUTTON", L"拔线", key, 0, cs->hInstance, g_fUi);
         g_btnClear.create(h, 213, L"BUTTON", L"清注入", key, 0, cs->hInstance, g_fUi);
+        g_btnSelfTest.create(h, 500, L"BUTTON", L"自测", key, 0, cs->hInstance, g_fUi);
         g_lblStream.create(h, 904, L"STATIC", L"音频流（麦克风源 / 扬声器录音）", vis, 0,
                            cs->hInstance, g_fUi);
         g_hzEdit.create(h, 400, L"EDIT", L"1000", vis | ES_AUTOHSCROLL | WS_BORDER,
@@ -313,7 +323,8 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         GetWindowTextW(dis->hwndItem, text, 64);
         KeyTone tone = KeyTone::Neutral;
         switch (dis->CtlID) {
-        case 101: tone = KeyTone::Accent; break;
+        case 101:
+        case 500: tone = KeyTone::Accent; break;
         case 212: tone = KeyTone::Fault; break;
         case 206:
         case 213:
@@ -324,11 +335,47 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         DrawKey(dis, text, tone);
         return TRUE;
     }
+    case WM_APP_TESTLINE: {
+        std::vector<std::string> drain;
+        {
+            std::lock_guard lk(g_lineMtx);
+            drain.swap(g_lines);
+        }
+        for (auto& l : drain) AppendLog(l);
+        if (wp == 1) { // suite finished on the worker thread
+            g_testRunning.store(false);
+            EnableWindow(g_btnSelfTest.wnd, TRUE);
+            RefreshStatus();
+        }
+        return 0;
+    }
     case WM_COMMAND: {
         const int id = LOWORD(wp);
         switch (id) {
         case 101: Post("/attach", "{\"profile\":\"" + CurrentProfile() + "\"}", "attach"); break;
         case 102: Post("/detach", "", "detach"); break;
+        case 500: {
+            if (g_testRunning.exchange(true)) break;
+            EnableWindow(g_btnSelfTest.wnd, FALSE);
+            AppendLog("==== starting self-test suite (worker thread) ====");
+            std::thread([h] {
+                const int failed = uacstudio::RunAutoTestSuite(g_port, [h](const std::string& line) {
+                    {
+                        std::lock_guard lk(g_lineMtx);
+                        g_lines.push_back(line);
+                    }
+                    PostMessageA(h, WM_APP_TESTLINE, 0, 0);
+                });
+                {
+                    std::lock_guard lk(g_lineMtx);
+                    g_lines.push_back(failed == 0 ? "SELF-TEST RESULT: ALL PASS"
+                                                  : "SELF-TEST RESULT: " +
+                                                        std::to_string(failed) + " FAILED");
+                }
+                PostMessageA(h, WM_APP_TESTLINE, 1, 0); // 1 = finished
+            }).detach();
+            break;
+        }
         case 910:
             SetEnabled(false);
             uacstudio::ShowEnvCheck(h, g_port);

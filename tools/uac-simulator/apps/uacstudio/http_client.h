@@ -6,12 +6,21 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mutex>
 #include <string>
 
 namespace uacstudio {
 
+// Winsock self-initialization: safe for every consumer (GUI/runner/CLI),
+// so callers never need their own WSAStartup just to reach the local API.
+inline void wsa_ensure_init() {
+    static std::once_flag once;
+    std::call_once(once, [] { WSADATA d; WSAStartup(MAKEWORD(2, 2), &d); });
+}
+
 inline std::string http_req(std::uint16_t port, const char* method, const std::string& path,
                             const std::string& body) {
+    wsa_ensure_init();
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) return "";
     sockaddr_in a{};
