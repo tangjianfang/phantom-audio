@@ -60,8 +60,9 @@ public:
     }
     bool cancel(std::uint32_t seqnum); // UNLINK：返回是否确有挂起项被取消
 
-    // UAC2 feedback 端点数值（12.13 格式，Q12.13 每微帧采样数）
-    static std::uint32_t fb_value_12_13(std::uint32_t rateHz, int ppmDrift = 0);
+    // Explicit feedback EP value, USB 2.0 High-Speed format: Q16.16
+    // samples-per-microframe (kernel sound/usb/endpoint.c: rate * 2^16 / 8000).
+    static std::uint32_t fb_value_16_16(std::uint32_t rateHz, int ppmDrift = 0);
 
 private:
     struct PendingIn {
@@ -84,6 +85,7 @@ private:
     enum class Src { Silence, Sine, File } src_ = Src::Silence;
     double sineHz_ = 1000.0, sineAmp_ = 0.5;
     double phase_ = 0.0; // 单声道相位（连续跨包）
+    std::uint64_t fracCarry_ = 0; // 非整采样率（如 44.1k）的微秒余数累积
     std::vector<std::int16_t> fileBuf_;
     std::uint64_t filePos_ = 0;
 

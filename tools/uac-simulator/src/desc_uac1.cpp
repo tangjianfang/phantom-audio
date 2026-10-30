@@ -147,10 +147,10 @@ std::vector<uint8_t> build_config_desc(const Uac1Profile& p) {
 
     auto cfg = b.build();
 
-    // 回填 AC class-specific wTotalLength（AC header 之后到下一接口之前的 class 段总长）
-    // 定位：AC IF 描述符(9B) 之后即 AC header
+    // 回填 AC class-specific wTotalLength：header 实长 8+n（UAC1 布局无 bCategory）
     const size_t acHdrAt = 9 /*config*/ + 9 /*IF0*/;
-    uint16_t csLen = 9; // header 自身
+    uint16_t hdrLen = static_cast<uint16_t>(8 + (nIf - 1)); // 8 + bInCollection
+    uint16_t csLen = hdrLen;
     if (spk) csLen += 12 + 13 + 9; // IT + FU + OT（长度与构造函数一致）
     if (mic) csLen += 12 + 13 + 9;
     cfg[acHdrAt + 5] = static_cast<uint8_t>(csLen);

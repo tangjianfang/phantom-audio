@@ -78,6 +78,10 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
                     trunc(it->second);
                     return false;
                 }
+                case 0x0F: // BOS（MS OS 2.0 平台能力入口）
+                    if (bos_.empty()) return true;
+                    trunc(bos_);
+                    return false;
                 case 0x06: // Device Qualifier（HS 设备必需，UAC2）
                     if (qualifier_.empty()) return true;
                     trunc(qualifier_);

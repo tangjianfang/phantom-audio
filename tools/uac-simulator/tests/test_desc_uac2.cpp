@@ -97,7 +97,7 @@ TEST_CASE("uac2 ac wTotalLength backfilled consistently") {
     auto cfg = uac2::build_config_desc(p);
     // AC header 位于 config(9)+IAD(8)+IF0(9)=26；wTotalLength @ +5
     const std::size_t acHdrAt = 26;
-    const std::uint16_t csLen = static_cast<std::uint16_t>(cfg[acHdrAt + 5] | (cfg[acHdrAt + 6] << 8));
+    const std::uint16_t csLen = static_cast<std::uint16_t>(cfg[acHdrAt + 6] | (cfg[acHdrAt + 7] << 8));
     // 手工累加：header(9)+clock(8)+spk(17+14+12)+mic(17+14+12)
     CHECK(csLen == 9 + 8 + 17 + 6 + 4 * 3 + 12 + 17 + 6 + 4 * 3 + 12);
 }

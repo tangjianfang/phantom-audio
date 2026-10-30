@@ -10,11 +10,11 @@ TEST_CASE("uac2 status word golden bytes") {
     auto w = inj.poll_interrupt_in();
     REQUIRE(w.has_value());
     REQUIRE(w->size() == 6);
-    // ADC-2 6.1.2：{0x00, entity=2, notify=1, wValue=0x0001, 0x00}
+    // ADC-2 6.1.2：{0x00, entity=2, notify=1, wValue=CS_VOLUME(0x02), 0x00}
     CHECK((*w)[0] == 0x00);
     CHECK((*w)[1] == 0x02);
     CHECK((*w)[2] == 0x01); // CUR_CHANGED
-    CHECK((*w)[3] == 0x01); // wValue lo（CN=1）
+    CHECK((*w)[3] == 0x02); // wValue lo = CS_VOLUME
     CHECK((*w)[4] == 0x00);
     CHECK((*w)[5] == 0x00);
     CHECK_FALSE(inj.poll_interrupt_in().has_value()); // 队列空

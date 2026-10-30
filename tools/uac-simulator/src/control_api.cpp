@@ -45,13 +45,22 @@ struct ControlApi::Impl {
     ControlCallbacks cb;
 
     void serve(SOCKET s) {
+        // 250ms receive timeout + stopping recheck: a half-open client must
+        // not wedge the serial accept thread (and stop()'s join) forever.
+        net::set_recv_timeout(s, 250);
         // 读到 \r\n\r\n
         std::string req;
         char buf[2048];
         while (req.find("\r\n\r\n") == std::string::npos && req.size() < 65536) {
             int r = ::recv(s, buf, sizeof(buf), 0);
-            if (r <= 0) { closesocket(s); return; }
-            req.append(buf, static_cast<std::size_t>(r));
+            if (r > 0) {
+                req.append(buf, static_cast<std::size_t>(r));
+                continue;
+            }
+            if (r < 0 && WSAGetLastError() == WSAETIMEDOUT && !stopping.load())
+                continue; // idle-but-open peer
+            closesocket(s);
+            return;
         }
         const auto hdrEnd = req.find("\r\n\r\n");
         if (hdrEnd == std::string::npos) { closesocket(s); return; }

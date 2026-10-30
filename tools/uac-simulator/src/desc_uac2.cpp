@@ -136,9 +136,12 @@ std::vector<std::uint8_t> build_config_desc(const Uac2Profile& p) {
     // AC 接口
     b.interface_(kInterfaceAC, 0, p.acInterruptEp ? 1 : 0, 0x01, 0x01, 0x20);
     {
-        std::vector<std::uint8_t> h{0x09, 0x24, 0x01, 0x00, 0x02 /*bcdADC 0x0200*/,
-                                    0x00, 0x00 /*wTotalLength 占位*/,
-                                    0x01 /*bmControls*/, 0x00 /*Reserved*/};
+        // ADC-2 4.7.2: bcdADC[3..4] bCategory[5] wTotalLength[6..7] bmControls[8]
+        std::vector<std::uint8_t> h{0x09, 0x24, 0x01,
+                                    0x00, 0x02,   // bcdADC 0x0200
+                                    0x00,         // bCategory: UNDEFINED (IO)
+                                    0x00, 0x00,   // wTotalLength (backfilled)
+                                    0x00};        // bmControls
         b.raw(h);
     }
     b.raw(clock_source(kClock));
@@ -179,13 +182,13 @@ std::vector<std::uint8_t> build_config_desc(const Uac2Profile& p) {
     }
 
     auto cfg = b.build();
-    // 回填 AC class-specific wTotalLength：IAD(8)+IF(9) 之后
+    // 回填 AC class-specific wTotalLength（偏移 6..7）：IAD(8)+IF(9) 之后
     const std::size_t acHdrAt = 9 /*config*/ + 8 /*IAD*/ + 9 /*IF0*/;
     std::uint16_t csLen = 9 /*header*/ + 8 /*clock source*/;
     if (spk) csLen += 17 + static_cast<std::uint16_t>(6 + 4 * (p.channels + 1)) + 12;
     if (mic) csLen += 17 + static_cast<std::uint16_t>(6 + 4 * (p.channels + 1)) + 12;
-    cfg[acHdrAt + 5] = static_cast<std::uint8_t>(csLen);
-    cfg[acHdrAt + 6] = static_cast<std::uint8_t>(csLen >> 8);
+    cfg[acHdrAt + 6] = static_cast<std::uint8_t>(csLen);
+    cfg[acHdrAt + 7] = static_cast<std::uint8_t>(csLen >> 8);
     return cfg;
 }
 

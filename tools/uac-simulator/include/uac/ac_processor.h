@@ -32,6 +32,12 @@ public:
     void set_descriptors(std::vector<std::uint8_t> device, std::vector<std::uint8_t> config,
                          std::map<std::uint8_t, std::vector<std::uint8_t>> strings,
                          std::vector<std::uint8_t> qualifier = {});
+    void set_msos(std::vector<std::uint8_t> bos, std::vector<std::uint8_t> descriptorSet,
+                  std::uint8_t vendorCode) {
+        bos_ = std::move(bos);
+        msosSet_ = std::move(descriptorSet);
+        msosVendorCode_ = vendorCode;
+    }
     void set_protocol(Protocol p) { proto_ = p; }
     void set_rates(std::vector<std::uint32_t> rates) { rates_ = std::move(rates); }
     void set_clock_id(std::uint8_t id) { clockId_ = id; }
@@ -52,6 +58,8 @@ private:
     std::vector<std::uint8_t> dev_, cfg_, qualifier_;
     std::map<std::uint8_t, std::vector<std::uint8_t>> strings_;
     std::vector<std::uint8_t> fuIds_;
+    std::vector<std::uint8_t> bos_, msosSet_;
+    std::uint8_t msosVendorCode_ = 0;
     Protocol proto_ = Protocol::Uac1;
     std::vector<std::uint32_t> rates_{48000};
     std::uint8_t clockId_ = 4;

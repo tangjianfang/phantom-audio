@@ -156,13 +156,14 @@ TEST_CASE("slot drift stays within +/-1 slot") {
     CHECK(g_last.payload.size() == 388);
 }
 
-TEST_CASE("feedback value Q12.13 golden") {
-    // 48k：6.0 samples/µframe × 2^13 = 49152 = 0x0000C000
-    CHECK(AsEngine::fb_value_12_13(48000) == 0x0000C000);
-    // 44.1k：5.5125 × 8192 = 45158.4 → 45158
-    CHECK(AsEngine::fb_value_12_13(44100) == 45158);
-    // +100ppm 漂移
-    CHECK(AsEngine::fb_value_12_13(48000, 100) == 49157); // 49152×1.0001 = 49156.99 → 49157
+TEST_CASE("feedback value Q16.16 (High-Speed) golden") {
+    // USB 2.0 HS explicit feedback: samples/uframe * 2^16 (kernel endpoint.c)
+    // 48k: 6.0 * 65536 = 393216 = 0x00060000
+    CHECK(AsEngine::fb_value_16_16(48000) == 0x00060000);
+    // 44.1k: 5.5125 * 65536 = 361267.2 -> 361267
+    CHECK(AsEngine::fb_value_16_16(44100) == 361267);
+    // +100ppm drift: 393216 * 1.0001 = 393255.3 -> 393255
+    CHECK(AsEngine::fb_value_16_16(48000, 100) == 393255);
 }
 
 TEST_CASE("auto pump thread completes within wall-clock deadline") {

@@ -35,6 +35,7 @@ public:
             off += static_cast<size_t>(n);
         }
     }
+    SOCKET raw() { return s_; }
     std::vector<unsigned char> recv(std::size_t n) {
         std::vector<unsigned char> buf(n);
         size_t off = 0;
@@ -123,6 +124,12 @@ TEST_CASE("M1 loopback: full enumeration + control + iso streams") {
     const auto port = srv.port();
 
     Client c(port);
+    // Client-side receive timeout: the strict "exactly 2 RETs" contract
+    // otherwise blocks forever if a wrap raced (recv blocks on an open socket
+    // that will never deliver more data).
+    DWORD tmo = 2000;
+    setsockopt(c.raw(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tmo),
+               sizeof(tmo));
     // IMPORT
     {
         std::vector<unsigned char> pkt;
@@ -199,14 +206,28 @@ TEST_CASE("M1 loopback: full enumeration + control + iso streams") {
     c.send(isoDescs);
     mc->advance_to(9999);
     model.pump(); // 未到期：无 RET（pacing 语义由单测覆盖）
-    mc->advance_to(10000);
-    model.pump();
-    mc->advance_to(20000);
-    model.pump();
-    // 读取两个 RET
+    // 通道线程读 submit 与测试推进时钟存在竞争：submit31 被读到时时钟可能
+    // 已在 20000+，其 deadline=30000。按视野推进并逐轮泵送，直到凑齐 2 RET。
+    for (std::uint64_t t = 10000; t <= 60000; t += 5000) {
+        mc->advance_to(t);
+        model.pump();
+        // 若两个 RET 已到，读循环会立刻完成；否则继续推进
+        // （无阻塞探测：c.recv 在有数据时立即返回）
+        // noop probe below
+        if (t >= 20000) Sleep(5); // give the wrap-sends a moment
+    }
+    // 读取两个 RET（RET 到达时刻与发送方线程竞争：c.recv 可能读到 0 字节
+    // —— 挂起等待是 TcpClient::recv 的阻塞语义，但 Windows 下对端尚未
+    // send 时 recv 可能立即返回空；短轮询直到凑齐 48B 头）
     int got = 0;
+    int emptyReads = 0;
     while (got < 2) {
         auto h = c.recv(kUrbHeaderSize);
+        if (h.empty()) {
+            if (++emptyReads > 3) { FAIL("no more RET data (timeout/close)"); }
+            Sleep(10);
+            continue;
+        }
         REQUIRE(h.size() == kUrbHeaderSize);
         REQUIRE(uac::rd_be<std::uint32_t>(&h[0]) == RET_SUBMIT);
         auto alen = uac::rd_be<std::uint32_t>(&h[24]);

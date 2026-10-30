@@ -153,6 +153,12 @@ struct UsbIpServer::Impl {
                     if (!send_all(s, encode_import_reply(found->first, 0))) break;
                     channels[busid] = conn;
                 }
+                // The channel loop uses blocking reads: clear the serve-loop
+                // receive timeout, or a quiet bus (>250ms) would look like a
+                // dead peer and tear the channel down mid-stream.
+                DWORD none = 0;
+                setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&none),
+                           sizeof(none));
                 conn->disp->on_import(found->first);
                 UrbDispatcher* disp = conn->disp;
                 channelThreads.emplace_back([this, busid, conn, disp] { // uac-cov:thread

@@ -13,12 +13,15 @@ void EventInjector::set_uac1_mode() {
 }
 
 void EventInjector::volume_changed(std::uint8_t entityId, std::uint8_t channel) {
+    // ADC-2 6.1.2: wValue = CN<<12 | MCN<<8 | ControlSelector; the volume
+    // control selector is CS_VOLUME = 0x02 (0x01 names mute and would make
+    // Windows re-read the unchanged mute CUR and drop the event).
     push(entityId, static_cast<std::uint8_t>(NotifyKind::CurChanged),
-         static_cast<std::uint16_t>(channel ? channel : 0x0001));
+         static_cast<std::uint16_t>((channel ? channel : 0) << 12 | 0x0002));
 }
 void EventInjector::mute_changed(std::uint8_t entityId, std::uint8_t channel) {
     push(entityId, static_cast<std::uint8_t>(NotifyKind::CurChanged),
-         static_cast<std::uint16_t>(channel ? channel : 0x0001));
+         static_cast<std::uint16_t>((channel ? channel : 0) << 12 | 0x0001));
 }
 
 void EventInjector::push(std::uint8_t originator, std::uint8_t notify, std::uint16_t wValue) {

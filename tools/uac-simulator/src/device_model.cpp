@@ -75,6 +75,11 @@ DeviceModel::DeviceModel(DeviceSnapshot snap, std::unique_ptr<MicroframeClock> c
       injector_(snap_.protocol == Protocol::Uac2 ? 6 : 2) {
     ac_.set_descriptors(desc::encode_device_desc(snap_.dev), snap_.config, snap_.strings,
                         snap_.qualifier);
+    if (snap_.msosVendorCode) {
+        ac_.set_msos(snap_.bos, snap_.msosSet, snap_.msosVendorCode);
+        msosSet_ = snap_.msosSet;
+        msosVendorCode_ = snap_.msosVendorCode;
+    }
     ac_.set_feature_unit_ids(snap_.featureUnitIds);
     ac_.set_protocol(snap_.protocol);
     ac_.set_rates(snap_.rates);
@@ -93,10 +98,12 @@ usbip::UsbIpDevice DeviceModel::usbip_device() const {
     d.idVendor = snap_.dev.idVendor;
     d.idProduct = snap_.dev.idProduct;
     d.bcdDevice = snap_.dev.bcdDevice;
-    d.bNumInterfaces = 3;
+    // 接口清单与配置描述符一致：HID 复合快照多出第 4（HID）接口
     const std::uint8_t proto =
         snap_.protocol == Protocol::Uac2 ? std::uint8_t{0x20} : std::uint8_t{0x00};
     d.interfaces = {{0x01, 0x01, proto}, {0x01, 0x02, proto}, {0x01, 0x02, proto}};
+    if (snap_.hidConsumerVolume) d.interfaces.push_back({0x03, 0x00, 0x00});
+    d.bNumInterfaces = static_cast<std::uint8_t>(d.interfaces.size());
     return d;
 }
 
@@ -118,6 +125,22 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     const auto& setup = cmd.submit.setup;
     const bool isOut = (setup[0] & 0x80) == 0;
     const std::span<const unsigned char> outData = isOut ? payload : std::span<const unsigned char>{};
+
+    // MS OS 2.0 vendor-specific descriptor-set request (bRequest = vendorCode,
+    // wIndex=0x07 per MS OS 2.0 spec; bmRequestType 0xC0 device-to-host)
+    if (msosSet_ && !msosSet_->empty() && setup[0] == 0xC0 && setup[1] == msosVendorCode_ &&
+        (setup[4] | (setup[5] << 8)) == 0x0007) {
+        Completion cm;
+        cm.ret.actual_length = static_cast<std::uint32_t>(msosSet_->size());
+        cm.payload = *msosSet_;
+        const auto wLen = static_cast<std::uint16_t>(setup[6] | (setup[7] << 8));
+        if (cm.payload.size() > wLen) {
+            cm.payload.resize(wLen);
+            cm.ret.actual_length = wLen;
+        }
+        complete(std::move(cm));
+        return;
+    }
 
     // HID 报告描述符请求：GET_DESCRIPTOR(Report, wValue=0x22xx, wIndex=interface)
     if (snap_.hidConsumerVolume && (setup[0] & 0x1f) == 0x01 && setup[1] == 0x06 &&
@@ -162,6 +185,9 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     }
 
     fault_.on_ep0_request();
+    // AcState is shared with the HTTP-thread injectors: serialize the
+    // control-transfer read-modify-write against them.
+    std::lock_guard<std::mutex> acLock(mtx_);
     if (fault_.should_disconnect()) {
         log_.append("{\"event\":\"fault_disconnect\"}");
         if (disconnectHook_) disconnectHook_();
@@ -235,7 +261,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
     const std::uint8_t epAddr = static_cast<std::uint8_t>(
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
     if (epAddr == 0x84) { // UAC2 explicit feedback IN: current Q12.13 value
-        const auto fb = AsEngine::fb_value_12_13(snap_.ac.sampleRate);
+        const auto fb = AsEngine::fb_value_16_16(snap_.ac.sampleRate);
         Completion cm;
         cm.ret.actual_length = 4;
         cm.payload = {static_cast<unsigned char>(fb), static_cast<unsigned char>(fb >> 8),
@@ -306,11 +332,17 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
 
 void DeviceModel::on_unlink(std::uint32_t seqnum, std::uint32_t unlink_seqnum,
                             UnlinkResultFn done) {
-    { // 先取消挂起的中断提交
+    { // 先取消挂起的中断提交（AC Status Word 0x81 与 HID 0x82）
         std::lock_guard lk(mtx_);
         for (auto it = heldInterrupts_.begin(); it != heldInterrupts_.end(); ++it)
             if (it->seqnum == unlink_seqnum) {
                 heldInterrupts_.erase(it);
+                done(-104);
+                return;
+            }
+        for (auto it = heldHid_.begin(); it != heldHid_.end(); ++it)
+            if (it->seqnum == unlink_seqnum) {
+                heldHid_.erase(it);
                 done(-104);
                 return;
             }

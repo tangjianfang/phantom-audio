@@ -97,19 +97,26 @@ AsEngine::Stats AsEngine::stats() const {
 
 std::vector<unsigned char> AsEngine::fill_packets(std::uint16_t nPackets,
                                                   std::vector<usbip::IsoPacket>& isoOut) {
-    // 每包样本数 = rate/1000（packetIntervalUs=1ms）× channels；±slotDrift
-    const std::uint32_t perMs = cfg_.rate / 1000; // 48k → 48 样本/ms（全声道一组 slot）
+    // Fractional-sample pacing: 44100 Hz is 44.1 samples/ms; integer division
+    // alone would stream at 44000 and drift against the host. A micro-
+    // accumulator carries the remainder across packets.
+    const std::uint64_t intervalUs = cfg_.packetIntervalUs;
+    std::uint64_t carry = fracCarry_;
+    const std::uint32_t bytesPerSample = std::max<std::uint32_t>(cfg_.bytesPerSample, 1);
     std::vector<unsigned char> out;
     isoOut.clear();
     isoOut.reserve(nPackets);
     std::uint32_t offset = 0;
     for (std::uint16_t p = 0; p < nPackets; ++p) {
-        std::int64_t slots = perMs;
-        if (p & 1) slots += cfg_.slotDrift; // 奇数包注入漂移（|drift|<=1 合规）
-        if (slots < 0) slots = 0;
-        const std::size_t nSamples = static_cast<std::size_t>(slots) * cfg_.channels;
-        const std::size_t bytes = nSamples * 2;
-        for (std::size_t s = 0; s < nSamples; ++s) {
+        // exact samples = rate * intervalUs / 1e6 (+ carry), floor.
+        // rate(<=768k) * intervalUs(<=1000) fits u64 with room to spare.
+        const std::uint64_t num = static_cast<std::uint64_t>(cfg_.rate) * intervalUs + carry;
+        std::uint64_t slots = num / 1000000;
+        carry = num % 1000000;
+        if (p & 1) slots += static_cast<std::uint64_t>(cfg_.slotDrift); // fault inj.
+        const std::size_t nSamples = slots * cfg_.channels;
+        const std::size_t bytes = nSamples * bytesPerSample;
+        for (std::size_t sm = 0; sm < nSamples; ++sm) {
             double v = 0.0;
             if (src_ == Src::Sine) {
                 v = std::sin(phase_) * sineAmp_;
@@ -118,21 +125,21 @@ std::vector<unsigned char> AsEngine::fill_packets(std::uint16_t nPackets,
                     phase_ -= 2.0 * 3.14159265358979323846;
             } else if (src_ == Src::File) {
                 if (filePos_ < fileBuf_.size()) v = fileBuf_[filePos_++] / 32768.0;
-                else v = 0.0;
             }
             const auto q = static_cast<std::int32_t>(std::lround(v * 2147483647.0)) >>
-                           (8 * (4 - cfg_.bytesPerSample)); // 低 (bytesPerSample) 字节 LE
-            for (std::uint8_t b = 0; b < cfg_.bytesPerSample; ++b)
-                out.push_back(static_cast<unsigned char>((q >> (8 * b)) & 0xff));
+                           (8 * (4 - cfg_.bytesPerSample));
+            for (std::uint8_t by = 0; by < cfg_.bytesPerSample; ++by)
+                out.push_back(static_cast<unsigned char>((q >> (8 * by)) & 0xff));
         }
         usbip::IsoPacket ip;
         ip.offset = offset;
-        ip.length = static_cast<std::uint32_t>(bytes);
+        ip.length = static_cast<std::uint32_t>(bytes);        // matches payload
         ip.actual_length = static_cast<std::uint32_t>(bytes);
         ip.status = 0;
         isoOut.push_back(ip);
         offset += static_cast<std::uint32_t>(bytes);
     }
+    fracCarry_ = carry;
     return out;
 }
 
@@ -163,8 +170,12 @@ void AsEngine::on_iso_out(std::span<const unsigned char> payload,
         std::vector<std::int16_t> cvt;
         if (slot > 2) {
             cvt.reserve(bytes / slot);
-            for (std::size_t off = 0; off + slot <= bytes; off += slot)
-                cvt.push_back(static_cast<std::int16_t>(data[off] | (data[off + 1] << 8)));
+            for (std::size_t off = 0; off + slot <= bytes; off += slot) {
+                // S32/S24 slots are little-endian: the significant 16 bits sit
+                // at the TOP of the slot (bytes slot-2 / slot-1), not the bottom.
+                cvt.push_back(static_cast<std::int16_t>(data[off + slot - 2] |
+                                                        (data[off + slot - 1] << 8)));
+            }
             capture_.write(cvt.data(), cvt.size());
         } else {
             capture_.write(reinterpret_cast<const std::int16_t*>(data), bytes / 2);
@@ -222,10 +233,11 @@ bool AsEngine::cancel(std::uint32_t seqnum) {
     return false;
 }
 
-std::uint32_t AsEngine::fb_value_12_13(std::uint32_t rateHz, int ppmDrift) {
-    // Q12.13：每微帧采样数 × 2^13；ppmDrift 注入频偏
+std::uint32_t AsEngine::fb_value_16_16(std::uint32_t rateHz, int ppmDrift) {
+    // High-Speed explicit feedback: Q16.16 samples per microframe.
+    // (Q12.13 would read 8x low to the host and starve adaptive playback.)
     const double perUframe = rateHz * (1.0 + ppmDrift * 1e-6) / 8000.0;
-    return static_cast<std::uint32_t>(perUframe * 8192.0 + 0.5);
+    return static_cast<std::uint32_t>(perUframe * 65536.0 + 0.5);
 }
 
 } // namespace uac

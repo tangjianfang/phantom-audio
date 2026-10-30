@@ -1,5 +1,6 @@
 // Profile 解析实现（nlohmann/json）
 #include <uac/profile.h>
+#include <uac/msos20.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
@@ -170,6 +171,10 @@ DeviceSnapshot build_snapshot(const Profile& p) {
         s.featureUnitIds = {uac2::kFuSpeaker, uac2::kFuMic};
         s.stream = StreamConfig{p.rates.front(), p.channels, p.subslot, 1000, 0};
         s.name = p.name;
+        // MS OS 2.0: BOS entry + jack-registry descriptor set (vendor code 1)
+        s.msosVendorCode = 0x01;
+        s.bos = msos20::build_bos(0x01);
+        s.msosSet = msos20::build_descriptor_set();
     }
     if (p.hidConsumerVolume && p.protocol == Protocol::Uac2) {
         s.config = hid::append_hid_interface(s.config, 3);

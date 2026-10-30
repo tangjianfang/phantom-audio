@@ -132,8 +132,8 @@ TEST_CASE("gap3: feedback EP 0x84 returns Q12.13 value at negotiated rate") {
     REQUIRE(fb.size() == 4);
     // 48000 Hz default snapshot rate: 6.0 samples/uframe -> 0xC000 (49152)
     const auto v = static_cast<std::uint32_t>(fb[0]) | (fb[1] << 8) | (fb[2] << 16) | (fb[3] << 24);
-    CHECK(v == uac::AsEngine::fb_value_12_13(48000)); // snapshot default rate
-    CHECK(v == 49152u); // 0xC000
+    CHECK(v == uac::AsEngine::fb_value_16_16(48000)); // snapshot default rate
+    CHECK(v == 393216u); // 0x00060000
 }
 
 TEST_CASE("gap3: UAC2 clock SET_CUR re-times the IN engine") {

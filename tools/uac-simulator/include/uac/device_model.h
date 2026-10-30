@@ -10,6 +10,7 @@
 #include <uac/event_injector.h>
 #include <uac/fault_injector.h>
 #include <functional>
+#include <optional>
 #include <thread>
 #include <uac/usbip_proto.h>
 #include <atomic>
@@ -33,6 +34,10 @@ struct DeviceSnapshot {
     bool hasMicIn = true;       // EP 0x86
     bool hidConsumerVolume = false; // EP 0x82 + 报告描述符
     std::vector<std::uint8_t> hidReportDesc;
+    // MS OS 2.0（可选）：BOS 入口 + 描述符集 + vendor code（0 = 未启用）
+    std::vector<std::uint8_t> bos;
+    std::vector<std::uint8_t> msosSet;
+    std::uint8_t msosVendorCode = 0;
     std::string name = "uac1-sim";
 };
 
@@ -93,6 +98,8 @@ private:
     std::mutex delayMtx_;
     bool delayStopped_ = false;               // set under delayMtx_ by the dtor
     FaultInjector fault_;
+    std::optional<std::vector<std::uint8_t>> msosSet_;
+    std::uint8_t msosVendorCode_ = 0;
     std::function<void()> disconnectHook_;
     std::vector<std::uint8_t> hidQueue_; // 待发送报告（每项 2B：id+keys）
     struct HeldHid { std::uint32_t seqnum; CompletionFn complete; };
