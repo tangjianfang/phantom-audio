@@ -1,6 +1,8 @@
 # 设计文档：Windows 虚拟 UAC 设备仿真测试台（修订版）
 
 > 日期：2026-10-29 ｜ 关联 RFC：`rfc-windows-virtual-uac-device.md`（v2，同日修订） ｜ 状态：已批准待落盘评审
+>
+> **勘误（2026-10-30）**：本文早先写作“usbip-win2 为 GPLv3”，有误：其许可为 BSD-2-Clause（GitHub 仓库登记；`v.0.9.7.8` / `v.0.9.8.1` 标签上的 `LICENSE.txt` 均为 BSD 2-Clause）。已更正下文三处（决策表“许可边界”、架构图节点、R-002），不改变架构结论。详见 RFC 顶部勘误。
 
 ## 1. 网络核实结论（评估依据）
 
@@ -57,7 +59,7 @@ issue #35 内核栈回溯证实：audiodg.exe → ks → usbaudio → usbccgp �
 | 主机侧断言 | **含 host-probe CLI**（MMDevice 枚举 / volume-watch / capture+Goertzel / notify-watch） |
 | 控制台形态 | **CLI（uacsim.exe）+ Win32 原生 GUI（uacstudio.exe，C++/GDI）+ CI**，三者共消费同一本地控制 API（127.0.0.1 HTTP JSON） |
 | 节奏 | **业余节奏**：无硬周期，按里程碑优先级推进，M0 是唯一 Go/No-Go 闸门 |
-| GPL 边界 | 仿真器仅说 USB/IP TCP 协议，不链接 usbip-win2 代码 → 零污染；usbip-win2 作为已签名驱动独立安装，仅内部测试使用无分发合规问题 |
+| 许可边界 | 仿真器仅说 USB/IP TCP 协议，不链接 usbip-win2 代码 → 零耦合；usbip-win2（**BSD-2-Clause**，2026-10-30 勘误，原写 GPLv3）作为已签名驱动独立安装；仅内部测试使用无分发合规问题，随包分发其二进制时需随附版权声明与许可条款 |
 
 ## 3. 系统架构（v2）
 
@@ -68,7 +70,7 @@ flowchart TB
         STACK["Windows 音频栈 + usbaudio.sys / usbaudio2.sys + usbccgp"]
     end
     subgraph RIG["UAC 仿真测试台"]
-        VHCI["usbip-win2 UDE vhci（已签名·GPLv3·版本锁定）"]
+        VHCI["usbip-win2 UDE vhci（已签名·BSD-2-Clause·版本锁定）"]
         SIM["uacsimd.exe（自研·C++）<br/>USB/IP server · 描述符引擎+UDE适配 · AC处理器<br/>AS引擎+虚拟微帧时钟 · 事件注入器 · 请求日志 · 控制API"]
     end
     CON["控制台三客户端：uacsim CLI / uacstudio GUI / CI"]
@@ -122,7 +124,7 @@ GUI 是控制 API 瘦客户端，核心逻辑全部在仿真器进程内。实�
 | ID | 风险 | 等级 | 处置 |
 |---|---|---|---|
 | R-001 | usbip-win2 等时链路 | **Medium（降级）** | 解法已知（issue #35 三位一体）；锁版本 + M0 验证；跟踪 #200 |
-| R-002 | GPLv3 | Low | 零链接、协议级隔离；仅内部使用无分发 |
+| R-002 | usbip-win2 许可为 BSD-2-Clause（原写 GPLv3，已勘误） | Low | 零链接、协议级隔离；再分发其二进制时随附版权声明与许可条款 |
 | R-003 | 系统版本门槛（1903+/1703+ 叠加） | Low | Accepted |
 | R-004 | **节奏语义**（原"定时器精度"表述不准） | Medium | 虚拟微帧时钟 + 按包延迟 RET_SUBMIT；M1 验收 10 分钟连续播放 |
 | R-005 | Windows 累积更新兼容回归 | Low | 锁版本 + M0 脚本可重跑 |

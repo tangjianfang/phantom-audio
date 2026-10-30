@@ -66,6 +66,7 @@ private:
 
     void log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
                  std::uint16_t wIndex, std::uint16_t wLength, const char* outcome, std::size_t n);
+    bool has_endpoint(std::uint8_t address) const;
 };
 
 } // namespace uac

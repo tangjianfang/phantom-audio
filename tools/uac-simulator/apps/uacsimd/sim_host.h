@@ -20,12 +20,23 @@ public:
     void set_log_file(const std::string& path) { logFile_ = path; }
     void stop();
     bool running() const { return running_.load(); }
+    // 实际监听端口（start 传 0 时为系统分配的端口；进程内自测与单测需要）
+    std::uint16_t http_port() const { return api_.port(); }
+    // 测试用：缩短握手/请求时限，避免等满默认值
+    void set_io_timeouts_ms(int controlApiRequestMs, int usbipControlIdleMs) {
+        api_.set_request_timeout_ms(controlApiRequestMs);
+        server_.set_control_idle_timeout_ms(usbipControlIdleMs);
+    }
 
     // 控制 API 回调实现（线程安全）
     std::string on_status();
     // confineName=false 允许绝对/相对路径（CLI --profile 契约）；HTTP 层传 true 仅允许纯名字
     std::string on_attach(const std::string& profileName, bool confineName = true);
     std::string on_detach();
+    // POST /shutdown: only records the request; uacsimd's main loop polls shutdown_requested() and stops the services after
+    // the reply has gone out (stopping the API from inside its own request thread would deadlock).
+    std::string on_shutdown();
+    bool shutdown_requested() const { return shutdownRequested_.load(); }
     std::string on_event(const std::string& type);
     std::string on_inject(const std::string& body); // Task 17 接入 FaultInjector
     std::string on_source(const std::string& body);
@@ -48,6 +59,7 @@ private:
     std::uint16_t usbipPort_ = 3240; // honored by every (re)listen
     std::string logFile_;            // per-model NDJSON sink
     std::atomic<bool> running_{false};
+    std::atomic<bool> shutdownRequested_{false};
 };
 
 } // namespace uac

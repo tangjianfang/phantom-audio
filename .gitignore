@@ -16,16 +16,24 @@ dist/
 coverage/
 *.gcov
 Testing/
+LastCoverageResults.log
 
 # artifacts
 *.etl
 *.wav
 logs/
-third_party/usbip-win2/*.exe
-third_party/usbip-win2/*.msi
-third_party/usbip-win2/*.zip
+
+# usbip-win2：安装包、从 Sandbox 里拷出的 USBip\ 目录与驱动包等，一律用户自行放入（GPLv3，不随仓库分发）。
+# 整个目录忽略：只忽略 *.exe/*.msi/*.zip 的话，.dll/.pdb/.inf/.sys/.cat 会作为未跟踪文件冒出来，
+# 一不小心就被 git add 进仓库。路径相对仓库根，必须带完整前缀才会生效。
+tools/uac-simulator/third_party/usbip-win2/
+
+# M0 探针：私钥与大文件（公钥 id_m0.pub 是有意提交的）
 tools/uac-simulator/scripts/m0/id_m0
-tools/uac-simulator/tools/uac-simulator/scripts/m0/id_m0.pub
 tools/uac-simulator/scripts/m0/*.iso
 tools/uac-simulator/scripts/m0/*.pcap
 
+# Sandbox 一键测试的产物与生成文件
+tools/uac-simulator/sandbox/stage/
+tools/uac-simulator/sandbox/results/
+tools/uac-simulator/sandbox/*.generated.wsb

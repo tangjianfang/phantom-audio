@@ -5,33 +5,46 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        # cmd：msvc-env.cmd 是批处理。注意 cmd 脚本里调用另一个 .cmd 必须用 call，
+        # 否则控制权不会回来；多行步骤用 && 串联，保证中间失败时整步失败。
+        shell: cmd
+        working-directory: tools/uac-simulator
     steps:
       - uses: actions/checkout@v4
 
+      # 所有构建命令都经 scripts\msvc-env.cmd：用 vswhere 找到 VS 并初始化 MSVC 环境。
+      # 之前直接运行 cmake，runner 的 PATH 里只有 MinGW g++：Configure 通过、Build 失败
+      #（这是依据"Configure 成功/Build 失败"和 annotations 做的推断，日志当时下载不到，未直接证实）。
+      - name: Toolchain
+        run: >-
+          call scripts\msvc-env.cmd where cl &&
+          call scripts\msvc-env.cmd cmake --version &&
+          call scripts\msvc-env.cmd ninja --version
+
       - name: Configure
-        working-directory: tools/uac-simulator
-        run: cmake --preset win-x64-debug
+        run: call scripts\msvc-env.cmd cmake --preset win-x64-debug
 
       - name: Build
-        working-directory: tools/uac-simulator
-        run: cmake --build --preset win-x64-debug
+        run: call scripts\msvc-env.cmd cmake --build --preset win-x64-debug
 
       - name: Test (L1 unit + L2 loopback scenarios)
-        working-directory: tools/uac-simulator
-        run: ctest --preset win-x64-debug --output-on-failure
+        run: call scripts\msvc-env.cmd ctest --preset win-x64-debug --output-on-failure
 
       - name: Release build sanity
-        working-directory: tools/uac-simulator
-        run: |
-          cmake --preset win-x64-release
-          cmake --build --preset win-x64-release
+        run: >-
+          call scripts\msvc-env.cmd cmake --preset win-x64-release &&
+          call scripts\msvc-env.cmd cmake --build --preset win-x64-release
 
       - name: Upload test binary artifacts
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: uac-simulator-win-x64
           path: |

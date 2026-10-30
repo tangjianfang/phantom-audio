@@ -1,14 +1,59 @@
-// 环境自检实现：系统版本 / uacsimd / usbip-win2 驱动 / usbip.exe / Hyper-V / OpenCppCoverage
-#include "http_client.h"   // winsock2 必须先于 windows.h
+// Environment check: Windows version / uacsimd / usbip-win2 driver / usbip.exe / Hyper-V / OpenCppCoverage.
+//
+// All text is English (the Windows Sandbox image has no CJK fonts, Chinese rendered as boxes).
+//
+// THREADING: RunEnvChecks() blocks (a connect to a closed loopback port, a SHA-256 over the driver payload, registry and
+// service queries), so the window never calls it on the UI thread. A checker thread runs it and reports each step
+// ("Checking: ...") and the final list through PostMessage; the driver install runs on its own thread the same way.
+// Closing the window while a thread is running is deferred until it has reported back, so a thread never posts to a
+// window that is gone (the CheckWnd object lives on ShowEnvCheck()'s stack and threads never touch it directly).
+#include "http_client.h"   // winsock2 must come before windows.h
 #include "env_check.h"
+#include "driver_installer.h"
+#include "host_ops.h"
+#include "sim_process.h"
 #include <winsvc.h>
 #include <shellapi.h>
+#include <objbase.h>
+#include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <thread>
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace uacstudio {
 
 namespace {
+
+std::string Utf8(const std::wstring& w) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(static_cast<std::size_t>(n > 0 ? n - 1 : 0), '\0');
+    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+// The folder of uacstudio.exe (uacsimd.exe, usbip-payload\ and profiles\ sit next to it in the zip)
+std::string SelfDir() {
+    wchar_t p[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, p, MAX_PATH);
+    std::wstring w(p);
+    return Utf8(w.substr(0, w.find_last_of(L"\\/")));
+}
+
+// Default location of the slim driver payload: usbip-payload\ next to uacstudio.exe (the layout inside the zip)
+std::string DefaultPayloadDir() { return SelfDir() + "\\usbip-payload"; }
+
+std::wstring Widen(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<std::size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
 
 bool ServiceExists(const wchar_t* name) {
     SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -52,75 +97,99 @@ bool FileExists(const wchar_t* path) {
 
 } // namespace
 
-std::vector<EnvItem> RunEnvChecks(std::uint16_t port) {
+std::vector<EnvItem> RunEnvChecks(std::uint16_t port, const EnvProgress& progress) {
+    auto say = [&](const std::wstring& what) {
+        if (progress) progress(what);
+    };
     std::vector<EnvItem> items;
 
-    // 1) 系统版本（usbip-win2 下限 Win10 1903 / build 18362）
+    // 1) Windows version (usbip-win2 needs Win10 1903 / build 18362)
     {
+        say(L"reading the Windows version ...");
         EnvItem it;
-        it.name = L"Windows 版本（需 Win10 1903 / 内部版本 18362+）";
+        it.name = L"Windows version (needs Win10 1903 / build 18362+)";
         const auto buildStr = RegReadString(HKEY_LOCAL_MACHINE,
                                             L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
                                             L"CurrentBuildNumber");
         const DWORD ubr = RegReadDword(HKEY_LOCAL_MACHINE,
                                        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR", 0);
         const DWORD build = static_cast<DWORD>(wcstol(buildStr.c_str(), nullptr, 10));
-        it.detail = L"内部版本 " + buildStr + L"." + std::to_wstring(ubr);
+        it.detail = L"Build " + buildStr + L"." + std::to_wstring(ubr);
         if (build >= 18362) {
             it.state = 2;
         } else {
             it.state = 0;
-            it.fixNote = L"系统过低：usbip-win2 驱动要求 Windows 10 1903 或更高，请先升级系统。";
+            it.fixNote = L"Windows is too old: the usbip-win2 driver needs Windows 10 1903 or newer.";
         }
         items.push_back(std::move(it));
     }
 
-    // 2) uacsimd 服务连接
+    // 2) uacsimd service (a network call: bounded by the 300 ms connect deadline in http_client.h)
     {
+        say(L"connecting to uacsimd on 127.0.0.1:" + std::to_wstring(port) + L" ...");
         EnvItem it;
-        it.name = L"uacsimd 仿真器服务（127.0.0.1:3241）";
+        it.name = L"uacsimd simulator service (127.0.0.1:" + std::to_wstring(port) + L")";
         const auto r = http_req(port, "GET", "/status", "");
         if (!r.empty()) {
             it.state = 2;
-            it.detail = L"已连接，控制 API 正常";
+            it.detail = L"Connected, the control API is up";
         } else {
             it.state = 0;
-            it.detail = L"未连接";
-            it.fixNote =
-                L"启动方式：仓库根目录运行 build.bat 生成后，双击/命令行启动 "
-                L"tools\\uac-simulator\\build\\release\\uacsimd.exe（无需管理员）。";
-            it.fixCmd = L"tools\\uac-simulator\\build\\release\\uacsimd.exe";
+            it.detail = L"Not connected";
+            it.fixNote = L"Start uacsimd.exe (it sits next to uacstudio.exe; no administrator rights needed).";
+            it.fixCmd = L"uacsimd.exe";
         }
         items.push_back(std::move(it));
     }
 
-    // 3) usbip-win2 驱动（实机 attach 必需）
+    // 3) usbip-win2 driver (needed to attach for real)
     {
+        say(L"looking for the usbip-win2 driver service ...");
         EnvItem it;
-        it.name = L"usbip-win2 驱动（usbip2_ude 服务）";
+        it.name = L"usbip-win2 driver (service usbip2_ude)";
         if (ServiceExists(L"usbip2_ude")) {
             it.state = 2;
-            it.detail = L"已安装";
+            it.detail = L"Installed";
         } else {
             it.state = 0;
-            it.detail = L"未安装（仅影响实机 attach，回环/单测不受影响）";
-            it.fixNote =
-                L"三步：\n"
-                L"  1. 打开官网下载页取 v0.9.7.8 的 x64 安装包，放入 "
-                L"tools\\uac-simulator\\third_party\\usbip-win2\\\n"
-                L"  2. 管理员 PowerShell 运行 tools\\uac-simulator\\scripts\\elevated-install-driver.ps1"
-                L"（自动创建系统还原点；安装会短暂重启所有 USB 集线器，系统无需重启）\n"
-                L"  3. 安装后 usbip.exe 可用：usbip attach -r 127.0.0.1 -b 1-1";
-            it.fixCmd = L"powershell -ExecutionPolicy Bypass -File tools\\uac-simulator\\scripts\\elevated-install-driver.ps1";
-            it.url = L"https://github.com/vadimgrn/usbip-win2/releases";
+            it.detail = L"Not installed (only affects real attach; loopback tests and unit tests are not affected)";
+            // The slim payload (usbip-payload\, about 3 MB, shipped in the zip) is in place -> one-click install,
+            // but only on a disposable machine
+            std::string why;
+            const bool disposable = HostCasesAllowed(true, &why);
+            say(L"verifying the driver payload (SHA-256 of every file) ...");
+            const PayloadCheck pc = CheckPayload(DefaultPayloadDir());
+            if (pc.ok && disposable) {
+                it.canInstallDriver = true;
+                it.detail = L"Not installed; the slim payload was found - use Install driver below (" + Widen(why) + L")";
+                it.fixNote = L"Press Install driver below: it runs pnputil (filter driver) and devnode (UDE driver + virtual host "
+                             L"controller). Installing restarts USB 3 hubs briefly; whether a reboot is needed is reported "
+                             L"by the installer.";
+            } else if (pc.ok) {
+                it.detail = L"Not installed. This machine is not disposable, so no driver is installed here - "
+                            L"install it in Windows Sandbox / a VM";
+                it.fixNote = L"The GUI offers no driver install on a machine that is not Windows Sandbox / a VM. Copy the "
+                             L"zip made by build.bat into the Sandbox, extract it and double-click run.cmd.";
+            } else {
+                it.fixNote =
+                    L"No usable slim payload (" + Widen(pc.error) + L"). Two ways:\n"
+                    L"  1. Use the zip made by build.bat (it contains usbip-payload\\) and extract it inside Sandbox / a VM\n"
+                    L"  2. Take the x64 installer from the usbip-win2 releases page, install it on a disposable machine, then "
+                    L"run collect-usbip-payload.bat to collect the slim payload\n"
+                    L"Do not install drivers on a development machine. Once installed, usbip.exe works: "
+                    L"usbip attach -r 127.0.0.1 -b 1-1";
+                it.fixCmd = L"powershell -ExecutionPolicy Bypass -File tools\\uac-simulator\\sandbox\\launch-sandbox.ps1";
+                it.url = L"https://github.com/vadimgrn/usbip-win2/releases";
+            }
         }
         items.push_back(std::move(it));
     }
 
-    // 4) usbip.exe（命令行 attach 工具，随驱动安装）
+    // 4) usbip.exe (command-line attach tool, installed with the driver)
     {
+        say(L"looking for usbip.exe ...");
         EnvItem it;
-        it.name = L"usbip.exe 命令行工具";
+        it.name = L"usbip.exe command-line tool";
         wchar_t found[MAX_PATH]{};
         if (SearchPathW(nullptr, L"usbip.exe", nullptr, MAX_PATH, found, nullptr) ||
             FileExists(L"C:\\Program Files\\USBip\\usbip.exe")) {
@@ -128,46 +197,48 @@ std::vector<EnvItem> RunEnvChecks(std::uint16_t port) {
             it.detail = found[0] ? found : L"C:\\Program Files\\USBip\\usbip.exe";
         } else {
             it.state = 0;
-            it.detail = L"未找到（随 usbip-win2 驱动安装）";
-            it.fixNote = L"安装 usbip-win2 驱动后自动包含；无需单独下载。";
+            it.detail = L"Not found (installed together with the usbip-win2 driver)";
+            it.fixNote = L"Included with the usbip-win2 driver; there is no separate download.";
             it.url = L"https://github.com/vadimgrn/usbip-win2/releases";
         }
         items.push_back(std::move(it));
     }
 
-    // 5) Hyper-V（可选：M0 Linux 探针 VM）
+    // 5) Hyper-V (optional: the M0 Linux probe VM)
     {
+        say(L"checking for Hyper-V ...");
         EnvItem it;
-        it.name = L"Hyper-V（可选：M0 探针虚拟机）";
+        it.name = L"Hyper-V (optional: M0 probe VM)";
         if (ServiceExists(L"vmms")) {
             it.state = 2;
-            it.detail = L"可用";
+            it.detail = L"Available";
         } else {
             it.state = 1;
-            it.detail = L"未启用（不装驱动实机测试可不启用）";
+            it.detail = L"Not enabled (not needed unless you test with a real driver)";
             it.fixNote =
-                L"启用步骤（需要重启电脑）：\n"
-                L"  1. 管理员 PowerShell：Enable-WindowsOptionalFeature -Online -FeatureName "
+                L"To enable (needs a reboot):\n"
+                L"  1. Administrator PowerShell: Enable-WindowsOptionalFeature -Online -FeatureName "
                 L"Microsoft-Hyper-V -All\n"
-                L"  2. 重启系统\n"
-                L"  3. 运行 tools\\uac-simulator\\scripts\\m0\\elevated-m0-vm.ps1 创建探针 VM";
+                L"  2. Reboot\n"
+                L"  3. Run tools\\uac-simulator\\scripts\\m0\\elevated-m0-vm.ps1 to create the probe VM";
             it.fixCmd =
                 L"Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All";
         }
         items.push_back(std::move(it));
     }
 
-    // 6) OpenCppCoverage（可选：覆盖率门禁）
+    // 6) OpenCppCoverage (optional: coverage gate)
     {
+        say(L"checking for OpenCppCoverage ...");
         EnvItem it;
-        it.name = L"OpenCppCoverage（可选：覆盖率统计）";
+        it.name = L"OpenCppCoverage (optional: coverage report)";
         if (FileExists(L"C:\\Program Files\\OpenCppCoverage\\OpenCppCoverage.exe")) {
             it.state = 2;
-            it.detail = L"已安装";
+            it.detail = L"Installed";
         } else {
             it.state = 1;
-            it.detail = L"未安装";
-            it.fixNote = L"安装命令（无需重启）：winget install OpenCppCoverage.OpenCppCoverage";
+            it.detail = L"Not installed";
+            it.fixNote = L"Install (no reboot needed): winget install OpenCppCoverage.OpenCppCoverage";
             it.fixCmd = L"winget install OpenCppCoverage.OpenCppCoverage";
         }
         items.push_back(std::move(it));
@@ -201,7 +272,7 @@ void MarkFirstRunDone() {
     RegCloseKey(k);
 }
 
-// ---------- 检查窗口 ----------
+// ---------- the check window ----------
 namespace {
 constexpr COLORREF C_BG = RGB(0x17, 0x1A, 0x21);
 constexpr COLORREF C_PANEL = RGB(0x1F, 0x24, 0x2E);
@@ -218,28 +289,137 @@ struct CheckRow {
     EnvItem item;
 };
 
+// Messages from the background threads. lParam is a heap object that the receiver owns and frees.
+constexpr UINT kMsgOpDone = WM_APP + 20;         // lParam OpDone*  (an install / uninstall / attach / detach / clean-up finished)
+constexpr UINT kMsgCheckProgress = WM_APP + 21;  // lParam std::wstring* ("what is being checked")
+constexpr UINT kMsgCheckDone = WM_APP + 22;      // lParam CheckDone*
+
+struct OpDone {
+    std::string title;
+    bool ok = false, reboot = false, refused = false;
+    std::string text; // multi-line step list
+};
+struct CheckDone {
+    std::vector<EnvItem> items;
+    HostState host; // what the action buttons may do
+};
+
+// The action buttons under the check list. The enabled state comes from PlanHostActions() (host_ops.h), which is unit tested.
+struct ActionDef {
+    HostAction action;
+    int id; // control id; below 1000 so it never collides with the row controls
+    const wchar_t* label;
+    int row; // 0 = simulator and Windows, 1 = driver and clean-up
+};
+constexpr ActionDef kActionDefs[] = {
+    {HostAction::StartSimulator, 20, L"Start simulator", 0},
+    {HostAction::StopSimulator, 21, L"Stop simulator", 0},
+    {HostAction::AttachToWindows, 22, L"Attach to Windows", 0},
+    {HostAction::DetachFromWindows, 23, L"Detach from Windows", 0},
+    {HostAction::InstallDriver, 24, L"Install driver", 1},
+    {HostAction::UninstallDriver, 25, L"Uninstall driver", 1},
+    {HostAction::CleanUpAll, 26, L"Clean up all", 1},
+};
+constexpr int kActionCount = 7;
+constexpr unsigned kUsbipPort = 3240; // the simulator's USB/IP port (uacsimd default)
+
 struct CheckWnd {
     HWND wnd = nullptr;
     std::vector<CheckRow> rows;
     HWND hint = nullptr, recheck = nullptr, done = nullptr;
+    HWND actionBtn[kActionCount]{};
     HBRUSH brBg = nullptr, brPanel = nullptr;
     HFONT fUi = nullptr, fMono = nullptr, fTitle = nullptr;
     HWND title = nullptr;
     std::uint16_t port = 3241;
+    HostState host;                  // UI thread only; filled by the last finished check
+    std::vector<ActionView> plan;    // PlanHostActions(host)
+    // Background work. Threads only hold the window handle and report through PostMessage - CheckWnd is a stack object
+    // and threads must not touch it. While one runs, closing is deferred (closePending) until it has reported back.
+    std::atomic<bool> checking{false};
+    std::atomic<bool> operating{false}; // an install / uninstall / attach / detach / clean-up is running
+    bool closePending = false; // UI thread only
+    std::thread checker;
+    std::thread worker;
 };
 
 CheckWnd* g_ck = nullptr;
 
 int S(HWND h, int logical) { return MulDiv(logical, static_cast<int>(GetDpiForWindow(h)), 96); }
 
-void Rebuild(CheckWnd* ck) {
-    // 清旧控件
+template <class T>
+void PostOwned(HWND wnd, UINT msg, WPARAM wp, T* payload) {
+    if (!PostMessageW(wnd, msg, wp, reinterpret_cast<LPARAM>(payload))) delete payload; // window gone: nobody would free it
+}
+
+void SetHint(CheckWnd* ck, const std::wstring& text) {
+    if (ck && ck->hint) SetWindowTextW(ck->hint, text.c_str());
+}
+
+void LayoutAll(CheckWnd* ck) {
+    RECT rc;
+    GetClientRect(ck->wnd, &rc);
+    const int W = rc.right, m = S(ck->wnd, 16);
+    int y = S(ck->wnd, 56);
+    MoveWindow(ck->title, m, S(ck->wnd, 16), W - 2 * m, S(ck->wnd, 26), TRUE);
+    // English captions are longer than the old ones ("Install driver", "Copy command"): wide buttons, and the name /
+    // detail text ends where the leftmost button of the row begins (a STATIC under a button would be hidden by it).
+    const int bw = S(ck->wnd, 112), bgap = S(ck->wnd, 6);
+    for (auto& r : ck->rows) {
+        const int nBtn = (r.copyCmd ? 1 : 0) + (r.openUrl ? 1 : 0);
+        const int textX = m + S(ck->wnd, 22);
+        const int textW = std::max(W - m - nBtn * (bw + bgap) - S(ck->wnd, 4) - textX, S(ck->wnd, 120));
+        MoveWindow(r.led, m, y + S(ck->wnd, 3), S(ck->wnd, 12), S(ck->wnd, 12), TRUE);
+        MoveWindow(r.name, textX, y, textW, S(ck->wnd, 20), TRUE);
+        MoveWindow(r.detail, textX, y + S(ck->wnd, 20), textW, S(ck->wnd, 18), TRUE);
+        int bx = W - m - bw;
+        for (HWND b : {r.copyCmd, r.openUrl}) {
+            if (!b) continue;
+            MoveWindow(b, bx, y, bw, S(ck->wnd, 24), TRUE);
+            bx -= bw + bgap;
+        }
+        y += S(ck->wnd, 44);
+    }
+    // Action rows: the buttons of a row share the width equally
+    y += S(ck->wnd, 4);
+    const int agap = S(ck->wnd, 6);
+    for (int row = 0; row < 2; ++row) {
+        int n = 0;
+        for (const auto& def : kActionDefs) n += def.row == row ? 1 : 0;
+        const int aw = (W - 2 * m - (n - 1) * agap) / n;
+        int col = 0;
+        for (int i = 0; i < kActionCount; ++i)
+            if (kActionDefs[i].row == row) MoveWindow(ck->actionBtn[i], m + col++ * (aw + agap), y, aw, S(ck->wnd, 30), TRUE);
+        y += S(ck->wnd, 30) + S(ck->wnd, 6);
+    }
+    y += S(ck->wnd, 2);
+    // Status text (up to three lines) with Recheck / Done to its right
+    MoveWindow(ck->hint, m, y, W - 2 * m - S(ck->wnd, 200), S(ck->wnd, 54), TRUE);
+    MoveWindow(ck->recheck, W - m - 2 * S(ck->wnd, 100), y + S(ck->wnd, 4), S(ck->wnd, 92), S(ck->wnd, 28), TRUE);
+    MoveWindow(ck->done, W - m - S(ck->wnd, 100), y + S(ck->wnd, 4), S(ck->wnd, 92), S(ck->wnd, 28), TRUE);
+    InvalidateRect(ck->wnd, nullptr, TRUE);
+}
+
+bool Busy(const CheckWnd* ck) { return ck->checking.load() || ck->operating.load(); }
+
+// Enable each action button from the plan, unless something is running (one background operation at a time).
+void RefreshButtons(CheckWnd* ck) {
+    for (int i = 0; i < kActionCount; ++i) {
+        bool on = false;
+        for (const auto& v : ck->plan)
+            if (v.action == kActionDefs[i].action) on = v.enabled;
+        EnableWindow(ck->actionBtn[i], (on && !Busy(ck)) ? TRUE : FALSE);
+    }
+    EnableWindow(ck->recheck, Busy(ck) ? FALSE : TRUE);
+}
+
+// Build the rows from finished check results (UI thread; no blocking work here)
+void BuildRows(CheckWnd* ck, std::vector<EnvItem> items) {
     for (auto& r : ck->rows) {
         for (HWND c : {r.led, r.name, r.detail, r.openUrl, r.copyCmd})
             if (c) DestroyWindow(c);
     }
     ck->rows.clear();
-    auto items = RunEnvChecks(ck->port);
     const DWORD vis = WS_CHILD | WS_VISIBLE;
     int i = 0;
     for (auto& it : items) {
@@ -248,67 +428,156 @@ void Rebuild(CheckWnd* ck) {
         r.led = CreateWindowExW(0, L"STATIC", L"", vis | SS_OWNERDRAW, 0, 0, 10, 10, ck->wnd,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(1000 + i * 10)),
                                 nullptr, nullptr);
-        r.name = CreateWindowExW(0, L"STATIC", it.name.c_str(), vis, 0, 0, 10, 10, ck->wnd,
+        r.name = CreateWindowExW(0, L"STATIC", it.name.c_str(), vis | SS_ENDELLIPSIS, 0, 0, 10, 10, ck->wnd,
                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(1001 + i * 10)),
                                  nullptr, nullptr);
-        r.detail = CreateWindowExW(0, L"STATIC", it.detail.c_str(), vis, 0, 0, 10, 10, ck->wnd,
+        r.detail = CreateWindowExW(0, L"STATIC", it.detail.c_str(), vis | SS_ENDELLIPSIS, 0, 0, 10, 10, ck->wnd,
                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(1002 + i * 10)),
                                    nullptr, nullptr);
         if (it.url)
             r.openUrl = CreateWindowExW(
-                0, L"BUTTON", L"打开官网", vis | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 10, 10, ck->wnd,
+                0, L"BUTTON", L"Open website", vis | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 10, 10, ck->wnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(1003 + i * 10)), nullptr, nullptr);
         if (!it.fixCmd.empty())
             r.copyCmd = CreateWindowExW(
-                0, L"BUTTON", L"复制命令", vis | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 10, 10, ck->wnd,
+                0, L"BUTTON", L"Copy command", vis | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 10, 10, ck->wnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(1004 + i * 10)), nullptr, nullptr);
-        for (HWND c : {r.led, r.name, r.detail})
-            if (c) SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ck->fUi), TRUE);
-        for (HWND c : {r.openUrl, r.copyCmd})
+        for (HWND c : {r.led, r.name, r.detail, r.openUrl, r.copyCmd})
             if (c) SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ck->fUi), TRUE);
         ck->rows.push_back(std::move(r));
         ++i;
     }
-    // 汇总提示
     int missing = 0, optional = 0;
     for (auto& it : items) {
         if (it.state == 0) ++missing;
         if (it.state == 1) ++optional;
     }
-    std::wstring summary = L"就绪环境 ";
+    std::wstring summary = L"Ready: ";
     summary += std::to_wstring(items.size() - missing - optional);
-    summary += L" 项 · 缺失 ";
+    summary += L"  |  missing: ";
     summary += std::to_wstring(missing);
-    summary += L" 项 · 可选未装 ";
+    summary += L"  |  optional, not installed: ";
     summary += std::to_wstring(optional);
-    summary += L" 项。缺失项按 fixNote 步骤处理后点“重新检测”。";
-    SetWindowTextW(ck->hint, summary.c_str());
-    // 布局
-    RECT rc;
-    GetClientRect(ck->wnd, &rc);
-    const int W = rc.right, m = S(ck->wnd, 16);
-    int y = S(ck->wnd, 56);
-    MoveWindow(ck->title, m, S(ck->wnd, 16), W - 2 * m, S(ck->wnd, 26), TRUE);
-    for (auto& r : ck->rows) {
-        MoveWindow(r.led, m, y + S(ck->wnd, 3), S(ck->wnd, 12), S(ck->wnd, 12), TRUE);
-        MoveWindow(r.name, m + S(ck->wnd, 22), y, W - 2 * m - S(ck->wnd, 200), S(ck->wnd, 20),
-                   TRUE);
-        MoveWindow(r.detail, m + S(ck->wnd, 22), y + S(ck->wnd, 20), W - 2 * m - S(ck->wnd, 200),
-                   S(ck->wnd, 18), TRUE);
-        int bx = W - m - S(ck->wnd, 96);
-        if (r.copyCmd) {
-            MoveWindow(r.copyCmd, bx, y, S(ck->wnd, 92), S(ck->wnd, 24), TRUE);
-            bx -= S(ck->wnd, 98);
-        }
-        if (r.openUrl) MoveWindow(r.openUrl, bx, y, S(ck->wnd, 92), S(ck->wnd, 24), TRUE);
-        y += S(ck->wnd, 44);
+    summary += missing > 0 ? L".  Fix the missing items following their notes, then click Recheck." : L".";
+    // When the guard says no, say so once, next to the buttons that are greyed out because of it
+    if (!ck->host.allowed)
+        summary += L"\nThe driver and Windows buttons are off: this machine is not a Windows Sandbox / VM. To allow them on a test machine "
+                   L"you can throw away, start uacstudio with UACSIM_FORCE_HOST_TESTS=1 in the environment.";
+    SetHint(ck, summary);
+    LayoutAll(ck);
+}
+
+// Run the checks on a background thread; progress and the result come back as messages.
+void StartCheck(CheckWnd* ck) {
+    if (ck->checking.load()) return;
+    if (ck->checker.joinable()) ck->checker.join(); // the previous run has already reported back
+    ck->checking = true;
+    RefreshButtons(ck);
+    SetHint(ck, L"Checking the environment ...");
+    const HWND wnd = ck->wnd;
+    const std::uint16_t port = ck->port;
+    ck->checker = std::thread([wnd, port] {
+        auto progress = [wnd](const std::wstring& step) { PostOwned(wnd, kMsgCheckProgress, 0, new std::wstring(step)); };
+        auto* d = new CheckDone;
+        d->items = RunEnvChecks(port, progress);
+        progress(L"what the install / attach / clean-up buttons may do (registry, driver payload hash, usbip ports) ...");
+        InstallOptions o;
+        o.payloadRoot = DefaultPayloadDir();
+        d->host = QueryHostState(port, o, kUsbipPort);
+        PostOwned(wnd, kMsgCheckDone, 0, d);
+    });
+}
+
+// Start one install / uninstall / attach / detach / clean-up on the worker thread. `busyText` is what the window says while
+// it runs; the result comes back as kMsgOpDone. Only one at a time (Busy), and the window cannot close underneath it.
+void StartOp(CheckWnd* ck, const std::wstring& busyText, std::function<OpDone()> job) {
+    if (Busy(ck)) return;
+    if (ck->worker.joinable()) ck->worker.join(); // the previous operation reported back long ago
+    ck->operating = true;
+    RefreshButtons(ck);
+    SetHint(ck, busyText);
+    const HWND wnd = ck->wnd;
+    ck->worker = std::thread([wnd, job = std::move(job)] { PostOwned(wnd, kMsgOpDone, 0, new OpDone(job())); });
+}
+
+OpDone FromOp(const HostOpResult& r) {
+    OpDone d;
+    d.title = r.title;
+    d.ok = r.ok;
+    d.reboot = r.rebootRequired;
+    d.refused = r.refused;
+    d.text = r.Summary();
+    return d;
+}
+
+// What each button does. Destructive ones ask first (default answer: No).
+void RunHostAction(CheckWnd* ck, HostAction action) {
+    if (Busy(ck)) return;
+    const HWND h = ck->wnd;
+    const std::uint16_t port = ck->port;
+    InstallOptions o;
+    o.payloadRoot = DefaultPayloadDir();
+    auto ask = [&](const wchar_t* title, const wchar_t* text) {
+        return MessageBoxW(h, text, title, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+    };
+    switch (action) {
+    case HostAction::StartSimulator:
+        StartOp(ck, L"Starting the simulator (uacsimd.exe) ...", [port] {
+            SimStartOptions so;
+            so.exeDir = SelfDir();
+            so.httpPort = port;
+            so.usbipPort = kUsbipPort;
+            std::error_code ec;
+            const std::string profiles = so.exeDir + "\\profiles";
+            if (std::filesystem::is_directory(std::filesystem::path(profiles), ec)) so.profilesDir = profiles;
+            return FromOp(FromSim("Start simulator", "start uacsimd.exe", TheSimulator().Start(so)));
+        });
+        break;
+    case HostAction::StopSimulator:
+        StartOp(ck, L"Stopping the simulator (detaching from Windows first when this machine allows it) ...",
+                [o, port] { return FromOp(StopSimulatorOp(port, kUsbipPort, o)); });
+        break;
+    case HostAction::InstallDriver:
+        if (!ask(L"Install driver",
+                 L"This will install the usbip-win2 kernel driver on this machine (pnputil + devnode) and create a "
+                 L"virtual USB host controller.\n\n"
+                 L"Installing restarts USB 3 hubs briefly; USB devices that are plugged in drop off for a moment. "
+                 L"No restore point is created.\n"
+                 L"Only do this on a disposable machine (Windows Sandbox / a VM) or a test machine you can throw away.\n\nContinue?"))
+            return;
+        StartOp(ck, L"Installing the driver ... (pnputil / devnode; this can take a minute or two - please do not close the window)",
+                [o] {
+                    const InstallResult r = InstallDriver(o);
+                    return FromOp(FromInstall("Install driver", r));
+                });
+        break;
+    case HostAction::UninstallDriver:
+        if (!ask(L"Uninstall driver",
+                 L"This removes the usbip-win2 virtual host controller and the usbip2_* driver packages from this machine, and "
+                 L"the files this program copied.\n\n"
+                 L"Anything still attached through usbip loses its device. Use 'Clean up all' to detach first.\n\nContinue?"))
+            return;
+        StartOp(ck, L"Uninstalling the driver ... (devnode / pnputil; please do not close the window)",
+                [o] { return FromOp(FromInstall("Uninstall driver", UninstallDriver(o))); });
+        break;
+    case HostAction::AttachToWindows:
+        StartOp(ck, L"Attaching the simulated device to Windows (usbip attach -r 127.0.0.1 -b 1-1) ...",
+                [o, port] { return FromOp(AttachToWindows(port, "1-1", o)); });
+        break;
+    case HostAction::DetachFromWindows:
+        StartOp(ck, L"Detaching this simulator's devices from Windows (usbip detach) ...",
+                [o] { return FromOp(DetachFromWindows(kUsbipPort, o)); });
+        break;
+    case HostAction::CleanUpAll:
+        if (!ask(L"Clean up all",
+                 L"This detaches the simulated devices from Windows, detaches them in the simulator, STOPS the simulator "
+                 L"(uacsimd.exe) and then UNINSTALLS the usbip-win2 driver.\n\n"
+                 L"usbip ports that do not belong to this simulator are left alone.\n\nContinue?"))
+            return;
+        StartOp(ck, L"Cleaning up: Windows ports, simulator, driver ... (please do not close the window)",
+                [o, port] { return FromOp(CleanUpAll(port, kUsbipPort, o)); });
+        break;
     }
-    MoveWindow(ck->hint, m, y + S(ck->wnd, 4), W - 2 * m - S(ck->wnd, 200), S(ck->wnd, 36), TRUE);
-    MoveWindow(ck->recheck, W - m - 2 * S(ck->wnd, 100), y + S(ck->wnd, 8), S(ck->wnd, 92),
-               S(ck->wnd, 28), TRUE);
-    MoveWindow(ck->done, W - m - S(ck->wnd, 100), y + S(ck->wnd, 8), S(ck->wnd, 92),
-               S(ck->wnd, 28), TRUE);
-    InvalidateRect(ck->wnd, nullptr, TRUE);
 }
 
 void CopyToClipboard(HWND owner, const std::wstring& text) {
@@ -323,6 +592,26 @@ void CopyToClipboard(HWND owner, const std::wstring& text) {
         }
         CloseClipboard();
     }
+}
+
+// ShellExecute can stall the calling thread for a moment (shell / default-browser start-up): do it off the UI thread
+void OpenUrlAsync(const wchar_t* url) {
+    std::thread([u = std::wstring(url)] {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        ShellExecuteW(nullptr, L"open", u.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        CoUninitialize();
+    }).detach();
+}
+
+// Close the window now, or - while a background thread is still running - as soon as it has reported back.
+void RequestClose(CheckWnd* ck, HWND h) {
+    if (ck && Busy(ck)) {
+        ck->closePending = true;
+        SetHint(ck, ck->operating.load() ? L"An operation is still running - the window closes when it is done ..."
+                                         : L"Finishing the check - the window closes in a moment ...");
+        return;
+    }
+    DestroyWindow(h);
 }
 
 LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -357,57 +646,102 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             DeleteObject(b);
             return TRUE;
         }
-        // 键帽按钮（与主窗一致的最小实现）
+        // Key-cap button (minimal version of the main window's)
         wchar_t text[64]{};
         GetWindowTextW(dis->hwndItem, text, 64);
         const bool down = (dis->itemState & ODS_SELECTED) != 0;
+        const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
         HBRUSH b = CreateSolidBrush(down ? RGB(0x38, 0x40, 0x4F) : RGB(0x27, 0x2D, 0x39));
         FillRect(dis->hDC, &dis->rcItem, b);
         DeleteObject(b);
-        HPEN pen = CreatePen(PS_SOLID, 1, C_ACCENT);
+        HPEN pen = CreatePen(PS_SOLID, 1, disabled ? RGB(0x3C, 0x44, 0x52) : C_ACCENT);
         auto oldPen = static_cast<HPEN>(SelectObject(dis->hDC, pen));
         auto oldBr = static_cast<HBRUSH>(SelectObject(dis->hDC, GetStockObject(NULL_BRUSH)));
-        Rectangle(dis->hDC, dis->rcItem.left, dis->rcItem.top, dis->rcItem.right,
-                  dis->rcItem.bottom);
+        Rectangle(dis->hDC, dis->rcItem.left, dis->rcItem.top, dis->rcItem.right, dis->rcItem.bottom);
         SelectObject(dis->hDC, oldPen);
         SelectObject(dis->hDC, oldBr);
         DeleteObject(pen);
         SetBkMode(dis->hDC, TRANSPARENT);
-        SetTextColor(dis->hDC, C_INK);
+        SetTextColor(dis->hDC, disabled ? C_MUTED : C_INK);
         auto oldF = static_cast<HFONT>(SelectObject(dis->hDC, ck->fUi));
         RECT tr = dis->rcItem;
         DrawTextW(dis->hDC, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dis->hDC, oldF);
         return TRUE;
     }
-    case WM_COMMAND: {
-        if (!ck) return 0; // null guard BEFORE any ck dereference
-        const int id = LOWORD(wp);
-        if (id == 1) { // 重新检测
-            Rebuild(ck);
-            return 0;
-        }
-        if (id == 2) { // 完成
+    case kMsgCheckProgress: {
+        std::unique_ptr<std::wstring> step(reinterpret_cast<std::wstring*>(lp));
+        if (ck && ck->checking.load() && step) SetHint(ck, L"Checking: " + *step);
+        return 0;
+    }
+    case kMsgCheckDone: {
+        std::unique_ptr<CheckDone> done(reinterpret_cast<CheckDone*>(lp)); // the receiver frees it
+        if (!ck) return 0;
+        ck->checking = false;
+        if (ck->closePending) {
             DestroyWindow(h);
             return 0;
         }
+        if (done) {
+            ck->host = std::move(done->host);
+            ck->plan = PlanHostActions(ck->host);
+            BuildRows(ck, std::move(done->items)); // also writes the status text, which mentions the guard
+        }
+        RefreshButtons(ck);
+        return 0;
+    }
+    case kMsgOpDone: {
+        std::unique_ptr<OpDone> done(reinterpret_cast<OpDone*>(lp)); // the receiver frees it
+        if (ck) ck->operating = false;
+        if (done) {
+            const std::wstring title = Widen(done->title) + (done->refused ? L" - refused"
+                                                             : !done->ok   ? L" - failed"
+                                                             : done->reboot ? L" - done (reboot required)"
+                                                                            : L" - done");
+            MessageBoxW(h, Widen(done->text).c_str(), title.c_str(),
+                        MB_OK | (done->ok ? MB_ICONINFORMATION : done->refused ? MB_ICONWARNING : MB_ICONERROR));
+        }
+        if (ck) {
+            if (ck->closePending) DestroyWindow(h);
+            else StartCheck(ck); // look again: the rows and the buttons follow what the operation changed
+        }
+        return 0;
+    }
+    case WM_COMMAND: {
+        if (!ck) return 0; // null guard BEFORE any ck dereference
+        const int id = LOWORD(wp);
+        if (id == 1) { // Recheck
+            if (!Busy(ck)) StartCheck(ck);
+            return 0;
+        }
+        if (id == 2) { // Done
+            RequestClose(ck, h);
+            return 0;
+        }
+        for (int i = 0; i < kActionCount; ++i)
+            if (id == kActionDefs[i].id) {
+                // A disabled button cannot be clicked, but the plan is checked again here: it is the rule, the button is a view
+                for (const auto& v : ck->plan)
+                    if (v.action == kActionDefs[i].action && v.enabled) RunHostAction(ck, v.action);
+                return 0;
+            }
         if (id >= 1000) {
             const int row = (id - 1000) / 10, act = (id - 1000) % 10;
             if (row < static_cast<int>(ck->rows.size())) {
                 auto& it = ck->rows[row].item;
-                if (act == 3 && it.url) ShellExecuteW(h, L"open", it.url, nullptr, nullptr,
-                                                      SW_SHOWNORMAL);
+                if (act == 3 && it.url) OpenUrlAsync(it.url);
                 if (act == 4 && !it.fixCmd.empty()) {
                     CopyToClipboard(h, it.fixCmd);
-                    MessageBoxW(h, (L"已复制到剪贴板：\n\n" + it.fixCmd + L"\n\n步骤：\n" +
-                                    it.fixNote)
-                                     .c_str(),
-                                L"安装引导", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(h, (L"Copied to the clipboard:\n\n" + it.fixCmd + L"\n\nSteps:\n" + it.fixNote).c_str(),
+                                L"Setup guide", MB_OK | MB_ICONINFORMATION);
                 }
             }
         }
         return 0;
     }
+    case WM_CLOSE:
+        RequestClose(ck, h);
+        return 0;
     case WM_ERASEBKGND: {
         auto dc = reinterpret_cast<HDC>(wp);
         RECT rc;
@@ -416,10 +750,9 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 1;
     }
     case WM_DESTROY:
-        // Clear the stack object's window handle FIRST so the modal loop in
-        // ShowEnvCheck() observes the exit and unwinds (previously it only
-        // exited on WM_QUIT: MarkFirstRunDone never ran and each open nested
-        // another permanent message loop).
+        // Clear the stack object's window handle FIRST so the modal loop in ShowEnvCheck() observes the exit and unwinds
+        // (previously it only exited on WM_QUIT: MarkFirstRunDone never ran and each open nested another permanent
+        // message loop).
         if (ck) ck->wnd = nullptr;
         EnableWindow(GetParent(h), TRUE);
         SetForegroundWindow(GetParent(h));
@@ -452,28 +785,38 @@ void ShowEnvCheck(HWND owner, std::uint16_t port) {
     ck.fMono = ck.fUi;
     ck.fTitle = CreateFontW(-22, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY,
                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    ck.wnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"UacEnvCheck", L"uacstudio · 环境自检",
+    // Window size in logical pixels scaled by the owner's DPI (it used to be raw pixels and clipped at 150 %)
+    const int dpi = owner ? static_cast<int>(GetDpiForWindow(owner)) : 96;
+    ck.wnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"UacEnvCheck", L"uacstudio - Environment and driver",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT,
-                             CW_USEDEFAULT, 760, 480, owner, nullptr, nullptr, nullptr);
+                             CW_USEDEFAULT, MulDiv(880, dpi, 96), MulDiv(590, dpi, 96), owner, nullptr, nullptr, nullptr);
     SetWindowLongPtrW(ck.wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ck));
-    ck.title = CreateWindowExW(0, L"STATIC", L"首次运行环境自检", WS_CHILD | WS_VISIBLE, 0, 0, 10,
+    ck.title = CreateWindowExW(0, L"STATIC", L"Environment and driver", WS_CHILD | WS_VISIBLE, 0, 0, 10,
                                10, ck.wnd, nullptr, nullptr, nullptr);
     SendMessageW(ck.title, WM_SETFONT, reinterpret_cast<WPARAM>(ck.fTitle), TRUE);
     ck.hint = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, ck.wnd,
                               nullptr, nullptr, nullptr);
     SendMessageW(ck.hint, WM_SETFONT, reinterpret_cast<WPARAM>(ck.fUi), TRUE);
-    ck.recheck = CreateWindowExW(0, L"BUTTON", L"重新检测", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+    ck.recheck = CreateWindowExW(0, L"BUTTON", L"Recheck", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                  0, 0, 10, 10, ck.wnd, reinterpret_cast<HMENU>(1), nullptr,
                                  nullptr);
-    ck.done = CreateWindowExW(0, L"BUTTON", L"完成", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0,
+    ck.done = CreateWindowExW(0, L"BUTTON", L"Done", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0,
                               10, 10, ck.wnd, reinterpret_cast<HMENU>(2), nullptr, nullptr);
     for (HWND c : {ck.recheck, ck.done})
         SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ck.fUi), TRUE);
-    Rebuild(&ck);
+    // The action buttons start disabled: what they may do is only known when the first check has reported back
+    for (int i = 0; i < kActionCount; ++i) {
+        ck.actionBtn[i] = CreateWindowExW(0, L"BUTTON", kActionDefs[i].label, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP | WS_DISABLED,
+                                          0, 0, 10, 10, ck.wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kActionDefs[i].id)),
+                                          nullptr, nullptr);
+        SendMessageW(ck.actionBtn[i], WM_SETFONT, reinterpret_cast<WPARAM>(ck.fUi), TRUE);
+    }
+    LayoutAll(&ck);
     EnableWindow(owner, FALSE);
     ShowWindow(ck.wnd, SW_SHOW);
     UpdateWindow(ck.wnd);
-    // 模态消息循环（窗口销毁即退出）
+    StartCheck(&ck); // the window is already on screen and responsive; the list fills in when the check reports back
+    // Modal message loop (ends when the window is destroyed)
     MSG msg;
     while (ck.wnd && GetMessageW(&msg, nullptr, 0, 0) > 0) {
         if (msg.message == WM_QUIT) {
@@ -483,6 +826,9 @@ void ShowEnvCheck(HWND owner, std::uint16_t port) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    // Closing is deferred while a thread runs, so by now both have reported back; join is instant
+    if (ck.checker.joinable()) ck.checker.join();
+    if (ck.worker.joinable()) ck.worker.join();
     MarkFirstRunDone();
 }
 

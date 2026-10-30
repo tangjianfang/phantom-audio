@@ -29,23 +29,36 @@
 ## 快速开始
 
 ```powershell
-# 构建（bash / VS2022 + CMake + Ninja）
+# 构建（Visual Studio 2022 的 C++ 工具集 + CMake + Ninja；scripts\msvc-env.cmd 用 vswhere 定位 VS，本机与 CI 同一入口）
 cd tools/uac-simulator
 ./scripts/msvc-env.cmd cmake --preset win-x64-debug
 ./scripts/msvc-env.cmd cmake --build --preset win-x64-debug
-./scripts/msvc-env.cmd ctest --preset win-x64-debug     # 121 用例全绿（无需驱动）
+./scripts/msvc-env.cmd ctest --preset win-x64-debug     # 172 用例 / 1468 断言（无需驱动）
+powershell -File scripts/smoke.ps1                      # GUI 非视觉自检（不判断外观）
 
-# 实机仿真（需先安装 usbip-win2 v0.9.7.8，见 docs/runbook.md）
-build/debug/uacsimd.exe        # 仿真器服务
-usbip attach -r 127.0.0.1 -b 1-1
-build/debug/uacstudio.exe      # GUI 控制台
+# 日常使用：仿真器服务 + GUI 控制台（开发机上只到这里：不装驱动、不挂设备）
+build/debug/uacsimd.exe
+build/debug/uacstudio.exe
 ```
 
-详见 `tools/uac-simulator/README.md` 与 `docs/runbook.md`。
+**需要真实 Windows 音频栈的验证（装驱动、`usbip attach`、WASAPI、`usbaudio2.sys` 绑定）一律在
+Windows Sandbox / VM 里做，开发机上不做。** 最省事的做法：
+
+```
+build.bat        # 构建 Release，成功后自动打包 -> tools\uac-simulator\dist\uacsim-sandbox-release.zip
+```
+
+把这个 zip 拷进 Sandbox，解压，双击 `run.cmd`。它自包含（exe、profiles、脚本；本机 `third_party\usbip-win2\` 里有驱动安装包的话也一并打入），
+带 `SHA256SUMS.txt` 校验拷贝是否损坏。也可以用 `tools/uac-simulator/sandbox/launch-sandbox.ps1` 一条命令启动 Sandbox（目录映射方式）。
+详见 [docs/sandbox.md](./docs/sandbox.md)。
+
+详见 `tools/uac-simulator/README.md`、`docs/runbook.md`、`docs/sandbox.md`；给 Claude Code 会话的约定见 [CLAUDE.md](./CLAUDE.md)。
 
 ## 许可
 
 - **个人 / 研究 / 教育 / 非商业组织**：依据 [PolyForm Noncommercial 1.0.0](./LICENSE) 免费使用、修改与分发。
 - **商业用途**：须事先取得商业授权——请提 GitHub Issue 联系作者。
 
-usbip-win2（若安装）为独立 GPLv3 驱动，与本仓库代码无链接关系，其许可以上游为准。
+usbip-win2（若安装）是独立的第三方项目，许可为 **BSD-2-Clause**（上游仓库 `LICENSE.txt`；v.0.9.7.8 与 v.0.9.8.1 标签均核对过），
+与本仓库代码无链接关系（本项目只通过 TCP 说 USB/IP 协议）。随包分发它的二进制时需附带其 `LICENSE.txt`——`build.bat` 生成的 zip 会自动带上。
+（早期 RFC/设计文档里写的 "GPLv3" 有误，见 [docs/sandbox.md](./docs/sandbox.md) 的"许可（更正）"。）

@@ -1,5 +1,6 @@
 // SimHost 实现
 #include "sim_host.h"
+#include <uac/path_policy.h>
 #include <uac/version.h>
 #include <nlohmann/json.hpp>
 #include <windows.h>
@@ -27,6 +28,7 @@ bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {
     };
     cb.attach = [this](const std::string& p) { return on_attach(p); };
     cb.detach = [this] { return on_detach(); };
+    cb.shutdown = [this] { return on_shutdown(); };
     cb.event = [this](const std::string& e) { return on_event(e); };
     cb.inject = [this](const std::string& b) { return on_inject(b); };
     cb.source = [this](const std::string& b) { return on_source(b); };
@@ -91,15 +93,12 @@ std::string SimHost::on_attach(const std::string& profileName, bool confineName)
                 }
             }
         }
-        // Confine HTTP-supplied profile names to plain identifiers: the
-        // filesystem operator/ replaces the base for absolute, rooted,
-        // and UNC names, so reject ANY separator (:/\) or ".." there.
-        // CLI --profile keeps full-path support via confineName=false.
-        if (confineName) {
-            const std::string bad = ":/\..";
-            if (profileName.find_first_of(bad) != std::string::npos)
-                return json{{"error", "invalid profile name"}}.dump();
-        }
+        // HTTP 传入的 profile 名只允许白名单字符（[A-Za-z0-9_-]，可带 .json）：
+        // std::filesystem 的 operator/ 遇到绝对/带根/UNC 名会直接替换 base，
+        // 且 fs::exists 对 UNC 路径会发起 SMB 连接。黑名单曾漏掉反斜杠，故改白名单。
+        // CLI --profile 经 confineName=false 保留完整路径语义。
+        if (confineName && !policy::valid_profile_name(profileName))
+            return json{{"error", "invalid profile name"}}.dump();
         // resolve profile file inside the (possibly relocated) dir
         for (auto cand : {profileName + ".json", profileName,
                           "profiles/" + profileName + ".json"}) {
@@ -121,7 +120,7 @@ std::string SimHost::on_attach(const std::string& profileName, bool confineName)
             return json{{"error", "profile not found: " + profileName}}.dump();
         }
         if (models_.size() >= 4)
-            return json{{"error", "实例已达上限 4（vhci 端口数）"}}.dump();
+            return json{{"error", "instance limit reached: 4 (the number of vhci ports)"}}.dump();
         server_.stop(); // 重建清单：断开现有连接（vhci 侧表现为拔出再插入）
         auto model = std::make_unique<DeviceModel>(std::move(snap));
         model->engine().set_source_sine(1000.0, 0.5);
@@ -167,6 +166,11 @@ std::string SimHost::on_detach() {
     model_ = nullptr;
     current_profile_.clear();
     return json{{"ok", true}}.dump();
+}
+
+std::string SimHost::on_shutdown() {
+    shutdownRequested_.store(true);
+    return json{{"ok", true}, {"shutdown", true}}.dump();
 }
 
 std::string SimHost::on_event(const std::string& type) {
@@ -237,7 +241,11 @@ std::string SimHost::on_source(const std::string& body) {
         } else if (kind == "silence") {
             model_->engine().set_source_silence();
         } else if (kind == "file") {
-            model_->engine().set_source_file(j.value("file", std::string()));
+            const auto file = j.value("file", std::string());
+            std::string why;
+            if (!policy::valid_media_path(file, &why))
+                return json{{"error", "invalid file path: " + why}}.dump();
+            model_->engine().set_source_file(file);
         } else {
             return json{{"error", "unknown kind"}}.dump();
         }
@@ -253,7 +261,12 @@ std::string SimHost::on_capture(const std::string& body) {
     try {
         const auto j = json::parse(body.empty() ? "{}" : body);
         const auto path = j.value("path", std::string());
-        model_->engine().set_capture_sink(path); // 空路径=关闭落盘
+        if (!path.empty()) { // 空路径=关闭落盘，无需校验
+            std::string why;
+            if (!policy::valid_media_path(path, &why))
+                return json{{"error", "invalid capture path: " + why}}.dump();
+        }
+        model_->engine().set_capture_sink(path);
         return json{{"ok", true}, {"path", path}}.dump();
     } catch (const std::exception& e) {
         return json{{"error", e.what()}}.dump();

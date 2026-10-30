@@ -25,13 +25,13 @@ std::vector<LintError> lint_common(const desc::ConfigView& cfg) {
     for (auto&& iv : cfg.interfaces)
         if (iv.cls == 0x01 && iv.sub == 0x01) hasAc = true;
     if (!hasAc)
-        errs.push_back({"missing-audio-control-interface", "无 AudioControl 接口(cls=1,sub=1)", 0});
+        errs.push_back({"missing-audio-control-interface", "no AudioControl interface (cls=1, sub=1)", 0});
 
     for (auto&& iv : cfg.interfaces) {
         if (!(iv.cls == 0x01 && iv.sub == 0x02)) continue; // 只检 AS
         if (iv.alt == 0 && iv.nEndpoints != 0)
             errs.push_back({"as-alt0-has-endpoint",
-                            "AS alt0 必须零端点（usbaudio2.sys 约束）", iv.offset});
+                            "AS alt 0 must have no endpoints (usbaudio2.sys constraint)", iv.offset});
         if (iv.alt != 0) {
             bool hasIso = false;
             for (auto&& e : cfg.endpoints)
@@ -42,7 +42,7 @@ std::vector<LintError> lint_common(const desc::ConfigView& cfg) {
                 }
             if (!hasIso)
                 errs.push_back({"as-alt-no-iso-endpoint",
-                                "AS 非 0 alt 必须含等时数据端点", iv.offset});
+                                "every non-zero AS alt must have an isochronous data endpoint", iv.offset});
         }
     }
     return errs;

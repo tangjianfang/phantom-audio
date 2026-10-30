@@ -17,9 +17,9 @@ std::uint16_t parse_u16(const json& j, const char* key, std::uint16_t def) {
     if (v.is_string()) {
         const auto s = v.get<std::string>();
         try { return static_cast<std::uint16_t>(std::stoul(s, nullptr, 0)); }
-        catch (...) { throw ProfileError(std::string("usb.") + key + " 非法: " + s); }
+        catch (...) { throw ProfileError(std::string("usb.") + key + " is invalid: " + s); }
     }
-    throw ProfileError(std::string("usb.") + key + " 类型非法");
+    throw ProfileError(std::string("usb.") + key + " has the wrong JSON type");
 }
 
 std::vector<std::uint8_t> parse_hex_bytes(const std::string& s) {
@@ -39,7 +39,7 @@ std::vector<std::uint8_t> parse_hex_bytes(const std::string& s) {
             cur = 0;
         }
     }
-    if (nibbles != 0) throw ProfileError("rawConfigOverride 存在半个字节");
+    if (nibbles != 0) throw ProfileError("rawConfigOverride has a dangling half byte (odd number of hex digits)");
     return out;
 }
 } // namespace
@@ -49,9 +49,9 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
     p.name = name;
     json j;
     try { j = json::parse(text); }
-    catch (const json::exception& e) { throw ProfileError(std::string("JSON 解析失败: ") + e.what()); }
+    catch (const json::exception& e) { throw ProfileError(std::string("JSON parse error: ") + e.what()); }
 
-    if (!j.contains("protocol")) throw ProfileError("缺少 protocol 字段");
+    if (!j.contains("protocol")) throw ProfileError("missing the protocol field");
     const auto proto = j.at("protocol").get<std::string>();
     if (proto == "uac1") {
         p.protocol = Protocol::Uac1;
@@ -61,7 +61,7 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
         p.subslot = 4; p.bits = 32;
         p.acInterruptEp = true;
     } else {
-        throw ProfileError("protocol 必须是 uac1 或 uac2，得到: " + proto);
+        throw ProfileError("protocol must be uac1 or uac2, got: " + proto);
     }
 
     if (j.contains("usb")) {
@@ -81,10 +81,10 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
             p.rates.clear();
             for (auto& r : a.at("rates")) {
                 const auto rate = r.get<std::uint32_t>();
-                if (rate < 8000 || rate > 768000) throw ProfileError("采样率越界: " + std::to_string(rate));
+                if (rate < 8000 || rate > 768000) throw ProfileError("sample rate out of range: " + std::to_string(rate));
                 p.rates.push_back(rate);
             }
-            if (p.rates.empty()) throw ProfileError("rates 不能为空");
+            if (p.rates.empty()) throw ProfileError("rates must not be empty");
         }
         if (a.contains("subslot")) p.subslot = static_cast<std::uint8_t>(a.at("subslot").get<int>());
         if (a.contains("bits")) p.bits = static_cast<std::uint8_t>(a.at("bits").get<int>());
@@ -101,7 +101,7 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
             p.volMin = to256(v.contains("min") ? v.at("min") : json(), -24.0);
             p.volMax = to256(v.contains("max") ? v.at("max") : json(), 0.0);
             p.volRes = to256(v.contains("res") ? v.at("res") : json(), 1.0);
-            if (p.volMin >= p.volMax) throw ProfileError("volumeDb: min 必须小于 max");
+            if (p.volMin >= p.volMax) throw ProfileError("volumeDb: min must be less than max");
         }
     }
 
@@ -112,14 +112,14 @@ Profile parse_profile_json(const std::string& text, const std::string& name) {
 
     if (j.contains("rawConfigOverride")) {
         p.rawConfigOverride = parse_hex_bytes(j.at("rawConfigOverride").get<std::string>());
-        if (p.rawConfigOverride.size() < 9) throw ProfileError("rawConfigOverride 少于 9 字节");
+        if (p.rawConfigOverride.size() < 9) throw ProfileError("rawConfigOverride is shorter than 9 bytes");
     }
     return p;
 }
 
 Profile load_profile(const std::string& jsonPath) {
     std::ifstream f(jsonPath);
-    if (!f) throw ProfileError("无法打开 profile: " + jsonPath);
+    if (!f) throw ProfileError("cannot open profile: " + jsonPath);
     std::stringstream ss;
     ss << f.rdbuf();
     const auto slash = jsonPath.find_last_of("/\\");

@@ -1,0 +1,22 @@
+{
+  "protocol": "uac1",
+  "usb": {
+    "vid": "0x1532",
+    "pid": "0x0570",
+    "bcdDevice": "0x0100",
+    "manufacturer": "Razer Inc",
+    "product": "Razer Clio",
+    "serial": "CLIO-SIM-0001"
+  },
+  "audio": {
+    "channels": 2,
+    "rates": [44100, 48000],
+    "subslot": 2,
+    "bits": 16,
+    "volumeDb": { "min": -24.0, "max": 0.0, "res": 1.0 },
+    "micIn": true,
+    "spkOut": true,
+    "acInterruptEp": false
+  },
+  "hid": { "consumerVolume": false }
+}

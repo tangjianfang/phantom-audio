@@ -226,16 +226,16 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
         cm.payload = std::move(r.data);
     }
     if (delayMs > 0) { // 延迟注入：计时后异步完成
-        auto payload = std::make_shared<std::vector<unsigned char>>(std::move(cm.payload));
+        auto delayed = std::make_shared<std::vector<unsigned char>>(std::move(cm.payload));
         auto status = cm.ret.status;
         auto len = cm.ret.actual_length;
-        std::thread th([this, delayMs, payload, status, len,
+        std::thread th([this, delayMs, delayed, status, len,
                         complete = std::move(complete)]() mutable {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             Completion d;
             d.ret.status = status;
             d.ret.actual_length = len;
-            d.payload = std::move(*payload);
+            d.payload = std::move(*delayed);
             complete(std::move(d));
         });
         bool pushed = false;
@@ -260,7 +260,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
     }
     const std::uint8_t epAddr = static_cast<std::uint8_t>(
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
-    if (epAddr == 0x84) { // UAC2 explicit feedback IN: current Q12.13 value
+    if (epAddr == 0x84) { // UAC2 explicit feedback IN: current Q16.16 value (High-Speed)
         const auto fb = AsEngine::fb_value_16_16(snap_.ac.sampleRate);
         Completion cm;
         cm.ret.actual_length = 4;
@@ -330,7 +330,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
     complete(std::move(cm));
 }
 
-void DeviceModel::on_unlink(std::uint32_t seqnum, std::uint32_t unlink_seqnum,
+void DeviceModel::on_unlink(std::uint32_t /*seqnum*/, std::uint32_t unlink_seqnum,
                             UnlinkResultFn done) {
     { // 先取消挂起的中断提交（AC Status Word 0x81 与 HID 0x82）
         std::lock_guard lk(mtx_);
@@ -352,30 +352,36 @@ void DeviceModel::on_unlink(std::uint32_t seqnum, std::uint32_t unlink_seqnum,
 }
 
 void DeviceModel::inject_volume_step(int steps) {
+    std::int16_t cur = 0;
     {
         std::lock_guard lk(mtx_);
-        const auto res = snap_.ac.volRes == 0 ? 256 : snap_.ac.volRes;
-        auto v = snap_.ac.volCur[0] + static_cast<std::int16_t>(res * steps);
+        const int res = snap_.ac.volRes == 0 ? 256 : snap_.ac.volRes;
+        // 在 int 域内累加并夹紧，再窄化——volMin/volMax 本身是 int16，结果必在范围内
+        int v = snap_.ac.volCur[0] + res * steps;
         if (v < snap_.ac.volMin) v = snap_.ac.volMin;
         if (v > snap_.ac.volMax) v = snap_.ac.volMax;
-        snap_.ac.volCur[0] = snap_.ac.volCur[1] = v;
+        cur = static_cast<std::int16_t>(v);
+        snap_.ac.volCur[0] = snap_.ac.volCur[1] = cur;
     }
     injector_.volume_changed(snap_.featureUnitIds.empty() ? 2 : snap_.featureUnitIds[0]);
     flush_held_interrupts();
+    // 日志里的 volCur 取自锁内快照：EP0 线程可能同时 SET_CUR，锁外读 snap_.ac 是数据竞争
     log_.append(std::string("{\"event\":\"inject_volume\",\"steps\":") + std::to_string(steps) +
-                ",\"volCur\":" + std::to_string(snap_.ac.volCur[0]) + "}");
+                ",\"volCur\":" + std::to_string(cur) + "}");
 }
 
 void DeviceModel::inject_mute_toggle() {
+    bool muted = false;
     {
         std::lock_guard lk(mtx_);
         snap_.ac.mute[0] = !snap_.ac.mute[0];
         snap_.ac.mute[1] = snap_.ac.mute[0];
+        muted = snap_.ac.mute[0];
     }
     injector_.mute_changed(snap_.featureUnitIds.empty() ? 2 : snap_.featureUnitIds[0]);
     flush_held_interrupts();
-    log_.append(std::string("{\"event\":\"inject_mute\",\"mute\":") +
-                std::to_string(snap_.ac.mute[0] ? 1 : 0) + "}");
+    log_.append(std::string("{\"event\":\"inject_mute\",\"mute\":") + std::to_string(muted ? 1 : 0) +
+                "}");
 }
 
 void DeviceModel::inject_hid_keys(std::uint8_t keys) {

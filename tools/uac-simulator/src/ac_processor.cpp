@@ -7,8 +7,8 @@ namespace uac {
 
 namespace {
 // bRequest 码
-constexpr std::uint8_t kGetStatus = 0x00, kSetInterface = 0x0B, kGetInterface = 0x0A,
-                        kSetConfiguration = 0x09, kGetConfiguration = 0x08,
+constexpr std::uint8_t kGetStatus = 0x00, kClearFeature = 0x01, kSetFeature = 0x03, kSetInterface = 0x0B,
+                        kGetInterface = 0x0A, kSetConfiguration = 0x09, kGetConfiguration = 0x08,
                         kGetDescriptor = 0x06;
 constexpr std::uint8_t kSetCur = 0x01, kGetCur = 0x81, kGetMin = 0x82, kGetMax = 0x83,
                         kGetRes = 0x84;
@@ -37,6 +37,13 @@ void AcProcessor::set_descriptors(std::vector<std::uint8_t> device,
     cfg_ = std::move(config);
     strings_ = std::move(strings);
     qualifier_ = std::move(qualifier);
+}
+
+// Is there an endpoint with this address (bit 7 = direction) in the configuration descriptor?
+bool AcProcessor::has_endpoint(std::uint8_t address) const {
+    for (std::size_t off = 0; off + 4 <= cfg_.size() && cfg_[off] >= 2; off += cfg_[off])
+        if (cfg_[off + 1] == 0x05 && cfg_[off] >= 7 && cfg_[off + 2] == address) return true;
+    return false;
 }
 
 void AcProcessor::log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
@@ -73,8 +80,17 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
                 case 0x01: trunc(dev_); return false;
                 case 0x02: trunc(cfg_); return false;
                 case 0x03: {
-                    auto it = strings_.find(wValue & 0xff);
-                    if (it == strings_.end()) return true;
+                    const std::uint8_t index = wValue & 0xff;
+                    auto it = strings_.find(index);
+                    if (it == strings_.end()) {
+                        // USB 2.0 §9.6.7: index 0 is the list of supported LANGIDs. We serve English (US) only; every other
+                        // string request is answered regardless of wIndex (Windows retries with LANGID 0 after a STALL).
+                        // Before this, index 0 stalled and Windows could not learn that the device has strings at all.
+                        if (index != 0 || strings_.empty()) return true;
+                        static const std::vector<std::uint8_t> kLangId{0x04, 0x03, 0x09, 0x04};
+                        trunc(kLangId);
+                        return false;
+                    }
                     trunc(it->second);
                     return false;
                 }
@@ -99,6 +115,21 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
             switch (bRequest) {
             case kSetInterface:
             case kGetInterface: res.kind = ControlResult::Kind::Ok; return false; // 状态由 DeviceModel 维护
+            default: return true;
+            }
+        }
+        if (type == 0x00 && recipient == 0x02) { // standard/endpoint
+            // USB 2.0 §9.4: halt can be cleared/set and read on any endpoint that exists. The second Sandbox run showed
+            // usbaudio2.sys sending CLEAR_FEATURE(ENDPOINT_HALT) to the interrupt endpoint 0x81 during start-up and getting a STALL.
+            // Nothing in this simulator ever halts, so the answer is always "not halted"; unknown endpoints still stall.
+            if (!has_endpoint(static_cast<std::uint8_t>(wIndex & 0xff))) return true;
+            switch (bRequest) {
+            case kGetStatus: res.kind = ControlResult::Kind::Ok; res.data = {0, 0}; return false;
+            case kClearFeature:
+            case kSetFeature:
+                if (wValue != 0x0000) return true; // only ENDPOINT_HALT (feature selector 0) is defined for endpoints
+                res.kind = ControlResult::Kind::Ok;
+                return false;
             default: return true;
             }
         }

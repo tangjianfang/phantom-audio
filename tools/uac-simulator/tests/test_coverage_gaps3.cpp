@@ -38,7 +38,7 @@ TEST_CASE("gap3: control api body split across packets and multi-param query") {
     a.sin_port = htons(api.port());
     a.sin_addr.s_addr = htonl(0x7f000001);
     REQUIRE(connect(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0);
-    const char* head = "GET /log?n=5&x=1 HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n";
+    const char* head = "GET /log?n=5&x=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     send(s, head, static_cast<int>(strlen(head)), 0);
     char buf[512]{};
     int r = recv(s, buf, sizeof(buf), 0);
@@ -117,7 +117,7 @@ TEST_CASE("gap3: engine silence source and file-open-fail fall to silence") {
 }
 
 // ---------- review fixes: feedback EP / rate sync ----------
-TEST_CASE("gap3: feedback EP 0x84 returns Q12.13 value at negotiated rate") {
+TEST_CASE("gap3: feedback EP 0x84 returns the Q16.16 value at negotiated rate") {
     auto clock = std::make_unique<ManualClock>();
     DeviceModel m(make_uac2_default_snapshot(), std::move(clock));
     usbip::UrbCommand c{};

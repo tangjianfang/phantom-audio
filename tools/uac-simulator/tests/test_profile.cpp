@@ -25,7 +25,7 @@ std::string profile_path(const char* name) {
 } // namespace
 
 TEST_CASE("built-in profiles load and build valid snapshots") {
-    const char* files[] = {"uac1-cmedia-sim.json", "uac2-48k.json", "uac2-hid-headset.json"};
+    const char* files[] = {"uac1-cmedia-sim.json", "uac2-48k.json", "uac2-hid-headset.json", "uac1-razer-clio.json"};
     for (auto* f : files) {
         auto p = load_profile(profile_path(f));
         CAPTURE(f);
@@ -49,6 +49,33 @@ TEST_CASE("uac1 profile fields propagate to snapshot") {
     CHECK(snap.ac.volRes == 256);
     auto enc = desc::encode_device_desc(snap.dev);
     CHECK(enc[0] == 0x12);
+}
+
+// Razer Clio (Synapse: folderName/deviceName "carol", rzDevice25Carol, PID 1392 = 0x0570). Only the USB identity can be
+// simulated - the Synapse-side fields (Chinese display name, claimInterface, ...) are not part of any USB descriptor.
+TEST_CASE("razer clio profile: VID 0x1532 / PID 0x0570 reach the device descriptor and the product string") {
+    auto p = load_profile(profile_path("uac1-razer-clio.json"));
+    CHECK(p.protocol == Protocol::Uac1);
+    auto snap = build_snapshot(p);
+    CHECK(snap.dev.idVendor == 0x1532);
+    CHECK(snap.dev.idProduct == 0x0570);
+    CHECK(snap.dev.idProduct == 1392); // the decimal PID from the Synapse device list
+    const auto enc = desc::encode_device_desc(snap.dev);
+    CHECK(enc[8] == 0x32); // idVendor little-endian
+    CHECK(enc[9] == 0x15);
+    CHECK(enc[10] == 0x70); // idProduct little-endian
+    CHECK(enc[11] == 0x05);
+    // iProduct (index 2) is "Razer Clio" in UTF-16LE: 2 + 2*10 bytes
+    REQUIRE(snap.strings.count(2) == 1);
+    const auto& s = snap.strings.at(2);
+    REQUIRE(s.size() == 2 + 2 * 10);
+    CHECK(s[1] == 0x03);
+    CHECK(s[2] == 'R');
+    CHECK(s[3] == 0x00);
+    // Control: the other UAC1 profile has a different identity (the test fails if the ids were hard-wired)
+    auto other = build_snapshot(load_profile(profile_path("uac1-cmedia-sim.json")));
+    CHECK(other.dev.idVendor != snap.dev.idVendor);
+    CHECK(other.dev.idProduct != snap.dev.idProduct);
 }
 
 TEST_CASE("uac2-hid-headset enables hid and adjusts volume range") {

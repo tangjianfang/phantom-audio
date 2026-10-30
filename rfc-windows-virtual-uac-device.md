@@ -2,13 +2,15 @@
 
 > 类型：rfc ｜ 模式：Forward ｜ 状态：Draft v2（2026-10-29 网络核实后修订，依据见 `docs/superpowers/specs/2026-10-29-uac-simulator-design.md`） ｜ 代码基线：`none` ｜ 最后核对：2026-10-29 ｜ 范围：`tools/uac-simulator/`（规划） ｜ lang: zh
 >
-> **需要你**：评审人（驱动组 + 测试组）在 2026-11-05 前确认 M0 前置验证排期，以及 GPLv3 组件仅限内部使用的边界
+> **需要你**：评审人（驱动组 + 测试组）在 2026-11-05 前确认 M0 前置验证排期，以及第三方组件 usbip-win2（BSD-2-Clause）的使用边界（仅内部测试，还是允许随包分发）
+>
+> **勘误（2026-10-30）**：本文早先写作“usbip-win2 为 GPLv3”，有误。核对依据：GitHub 仓库登记的许可为 BSD-2-Clause；`v.0.9.7.8` 与 `v.0.9.8.1` 两个标签上的 `LICENSE.txt` 均为 BSD 2-Clause；源码树中没有 GPL/SPDX 声明。已更正下文四处（顶部“需要你”、Summary、架构图节点标签、R-002），设计文档对应处同步更正。更正不改变架构结论（零代码链接、协议级隔离仍然成立），只放宽了要求：随包分发其二进制时需随附版权声明与许可条款，无源码提供义务。随附数据文件 `usb.ids` 与 CLI11 的许可未逐个核实。
 
 ## Summary
 
 本方案在**单台 Windows 上纯软件仿真指定 VID/PID 的 UAC1/UAC2 USB 音频设备**，替代真实声卡/麦克风硬件做主机侧音频软件测试。虚拟 USB 主控复用已签名的开源 [usbip-win2](https://github.com/vadimgrn/usbip-win2)（UDE 框架，零内核开发），设备模型为用户态自研。
 
-评审需决定两件事：等时链路这一最高风险是否按 M0 前置验证；GPLv3 组件是否仅限内部测试使用。
+评审需决定两件事：等时链路这一最高风险是否按 M0 前置验证；第三方组件 usbip-win2（BSD-2-Clause）是否仅限内部测试使用（若要随包分发，只需随附其版权声明与许可条款）。
 
 **TL;DR**
 
@@ -56,7 +58,7 @@ flowchart TB
         STACK["<b>Windows 音频栈 + USB 类驱动</b><br/><span style='color:#6b7280;font-size:12px'>usbaudio.sys / USBAC2.sys</span>"]
     end
     subgraph TG["UAC 仿真测试台（本方案新建）"]
-        UDE["<b>usbip-win2 UDE 虚拟主控</b><br/><span style='color:#6b7280;font-size:12px'>内核态·已签名·GPLv3</span>"]
+        UDE["<b>usbip-win2 UDE 虚拟主控</b><br/><span style='color:#6b7280;font-size:12px'>内核态·已签名·BSD-2-Clause</span>"]
         SIM["<b>UAC 设备仿真器</b><br/><span style='color:#6b7280;font-size:12px'>用户态·自研</span>"]
         CON["<b>控制台：CLI / Win32 GUI / CI</b>"]
     end
@@ -197,7 +199,7 @@ sequenceDiagram
 | ID | Issue / Risk | Impact | Status | Owner |
 |---|---|---|---|---|
 | R-001 | 等时链路：v1 判为"未证实"已过时——usbip-win2 [issue #35](https://github.com/vadimgrn/usbip-win2/issues/35)（2024-04 修复）确立解法：设备呈现 High-Speed + QueryBusTime + ISOCH bInterval≥4；残余风险为版本漂移（[#200](https://github.com/vadimgrn/usbip-win2/issues/200) 纪元问题 2026-10 仍开放） | Medium | Mitigated：锁定 usbip-win2 版本 + M0 实测 | 驱动组 |
-| R-002 | usbip-win2 为 GPLv3：仿真器仅说 USB/IP TCP 协议、零代码链接，无污染；内部测试使用无分发合规问题 | Low | Accepted | 架构 |
+| R-002 | usbip-win2 许可为 BSD-2-Clause（2026-10-30 勘误，原写 GPLv3）：仿真器仅说 USB/IP TCP 协议、零代码链接；内部测试使用无分发合规问题；随包分发其二进制时需随附版权声明与许可条款，无源码提供义务 | Low | Accepted | 架构 |
 | R-003 | 系统版本门槛叠加：UAC2 需 Win10 1703+，usbip-win2 需 Win10 1903+ | Low | Accepted | 驱动组 |
 | R-004 | 节奏语义（v1 表述为"1ms 定时精度"，不准）：USB/IP 下主机不等真实总线，仿真器立即回 RET_SUBMIT 会使音频流快进/欠载；须以虚拟微帧时钟按包数延迟应答 | Medium | Mitigated：虚拟微帧时钟 + M1 验收连续 10 分钟播放 | 仿真器组 |
 | R-005 | Windows 累积更新导致 usbip-win2 兼容性回归 | Low | Open：锁版本 + M0 脚本可重跑 | 驱动组 |

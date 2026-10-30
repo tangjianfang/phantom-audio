@@ -18,12 +18,19 @@ std::string http_post_get(const std::string& host, std::uint16_t port, const cha
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(port);
-    a.sin_addr.s_addr = inet_addr(host.c_str());
+    // 服务端只监听 127.0.0.1；"localhost" 按回环解析，其它名字不做 DNS 解析
+    const char* ip = host == "localhost" ? "127.0.0.1" : host.c_str();
+    if (inet_pton(AF_INET, ip, &a.sin_addr) != 1) {
+        closesocket(s);
+        return "{\"error\":\"bad --host (IPv4 address or localhost expected)\"}";
+    }
     if (connect(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) {
         closesocket(s);
-        return "{\"error\":\"connect failed（uacsimd 未启动？）\"}";
+        return "{\"error\":\"connect failed - is uacsimd running?\"}";
     }
-    std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: t\r\n";
+    // Host 头如实带上目标地址：服务端会拒绝非回环 Host（防 DNS 重绑定）
+    std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: " + host + ":" +
+                      std::to_string(port) + "\r\n";
     if (!body.empty()) req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
     req += "Connection: close\r\n\r\n" + body;
     send(s, req.c_str(), static_cast<int>(req.size()), 0);
@@ -55,7 +62,7 @@ int main(int argc, char** argv) {
         } else break;
     }
     if (i >= argc) {
-        printf("用法: uacsim [--host 127.0.0.1:3241] <status|attach|detach|event|inject|source|capture|log> [args]\n");
+        printf("usage: uacsim [--host 127.0.0.1:3241] <status|attach|detach|shutdown|event|inject|source|capture|log> [args]\n");
         return 2;
     }
     const std::string cmd = argv[i++];
@@ -65,6 +72,7 @@ int main(int argc, char** argv) {
         out = http_post_get(host, port, "POST", "/attach",
                             std::string("{\"profile\":\"") + uac::JsonEscape(argv[i]) + "\"}");
     else if (cmd == "detach") out = http_post_get(host, port, "POST", "/detach", "");
+    else if (cmd == "shutdown") out = http_post_get(host, port, "POST", "/shutdown", ""); // stops uacsimd itself
     else if (cmd == "event" && i < argc)
         out = http_post_get(host, port, "POST", "/event",
                             std::string("{\"type\":\"") + argv[i] + "\"}");
@@ -81,7 +89,7 @@ int main(int argc, char** argv) {
         out = http_post_get(host, port, "GET",
                             std::string("/log?n=") + (i < argc ? argv[i] : "50"), "");
     else {
-        printf("未知命令: %s\n", cmd.c_str());
+        printf("unknown command: %s\n", cmd.c_str());
         return 2;
     }
     printf("%s\n", out.c_str());

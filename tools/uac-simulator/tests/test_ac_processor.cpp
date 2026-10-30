@@ -109,6 +109,46 @@ TEST_CASE("get descriptor device/config/string with wLength truncation") {
     CHECK(sMissing.kind == ControlResult::Kind::Stall); // 无此字符串索引
 }
 
+// USB 2.0 §9.6.7：字符串索引 0 返回支持的语言 ID 数组。第一次 Sandbox 运行里 Windows 对索引 0 请求了 3 次
+// （UAC2 两次、UAC1 一次），全部被 STALL（设备侧日志里 wValue=768, resp=stall）；其余索引的请求则带着 LANGID 0x0409 或 0 才成功。
+TEST_CASE("string descriptor 0 is the LANGID list (US English), other missing indexes still stall") {
+    Fixture f;
+    const std::vector<std::uint8_t> want{0x04, 0x03, 0x09, 0x04};
+    auto r = f.ac.on_control(0x80, 0x06, 0x0300, 0, 255, {});
+    REQUIRE(r.kind == ControlResult::Kind::Ok);
+    CHECK(r.data == want);
+    // Windows 也会用 wLength=4 / 2 来问
+    auto r4 = f.ac.on_control(0x80, 0x06, 0x0300, 0, 4, {});
+    REQUIRE(r4.kind == ControlResult::Kind::Ok);
+    CHECK(r4.data == want);
+    auto r2 = f.ac.on_control(0x80, 0x06, 0x0300, 0, 2, {});
+    REQUIRE(r2.kind == ControlResult::Kind::Ok);
+    CHECK(r2.data.size() == 2);
+    // 对照：不存在的索引照旧 STALL（不是"所有字符串请求都成功"）
+    CHECK(f.ac.on_control(0x80, 0x06, 0x0399, 0x0409, 4, {}).kind == ControlResult::Kind::Stall);
+    CHECK(f.ac.on_control(0x80, 0x06, 0x0304, 0x0409, 255, {}).kind == ControlResult::Kind::Stall); // 这个 profile 有序列号时是 3，没有 4
+}
+
+// 第二次 Sandbox 运行的设备侧日志里，usbaudio2.sys 启动时对中断端点 0x81 发了 CLEAR_FEATURE(ENDPOINT_HALT)
+// （bmRequestType=2, bRequest=1, wIndex=129），被 STALL。USB 2.0 §9.4.1：对存在的端点清除 halt 必须成功。
+TEST_CASE("endpoint requests: halt can be cleared/set on endpoints that exist, not on ones that do not") {
+    Fixture f;
+    for (int epInt : {0x06, 0x86}) { // 两个默认 profile 都有的数据端点（喇叭 OUT / 麦克风 IN）
+        const auto ep = static_cast<std::uint16_t>(epInt);
+        INFO("endpoint " << ep);
+        CHECK(f.ac.on_control(0x02, 0x01, 0 /*ENDPOINT_HALT*/, ep, 0, {}).kind == ControlResult::Kind::Ok); // CLEAR_FEATURE
+        CHECK(f.ac.on_control(0x02, 0x03, 0 /*ENDPOINT_HALT*/, ep, 0, {}).kind == ControlResult::Kind::Ok); // SET_FEATURE
+        auto st = f.ac.on_control(0x82, 0x00, 0, ep, 2, {}); // GET_STATUS：没有 halt
+        REQUIRE(st.kind == ControlResult::Kind::Ok);
+        CHECK(st.data == std::vector<std::uint8_t>{0, 0});
+    }
+    // 对照：不存在的端点、不是 ENDPOINT_HALT 的特性值，都照旧 STALL
+    CHECK(f.ac.on_control(0x02, 0x01, 0, 0x05, 0, {}).kind == ControlResult::Kind::Stall);
+    CHECK(f.ac.on_control(0x02, 0x01, 0, 0x8F, 0, {}).kind == ControlResult::Kind::Stall);
+    CHECK(f.ac.on_control(0x82, 0x00, 0, 0x05, 2, {}).kind == ControlResult::Kind::Stall);
+    CHECK(f.ac.on_control(0x02, 0x01, 1 /*不是 ENDPOINT_HALT*/, 0x06, 0, {}).kind == ControlResult::Kind::Stall);
+}
+
 TEST_CASE("set/get configuration status") {
     Fixture f;
     auto sc = f.ac.on_control(0x00, 0x09, 1, 0, 0, {});

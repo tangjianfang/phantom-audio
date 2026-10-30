@@ -1,6 +1,7 @@
 // host_probe —— 主机侧断言 CLI（MMDevice 枚举 / 音量回调 / 设备通知 / WASAPI 采集 Goertzel）
 // 命令：
-//   enum                          枚举音频端点（JSON 行）
+//   enum [--all]                  枚举音频端点（JSON 行）；--all 含所有状态并多一个 "state" 字段（诊断用）
+//   session                       当前会话信息（是否远程会话；Sandbox 里是远程会话）
 //   volume-watch --seconds N [--endpoint <id>]   IAudioEndpointVolume 回调（JSON 行）
 //   notify-watch --seconds N                     设备增删/默认变更（JSON 行）
 //   capture --freq F --seconds N [--endpoint <id>] [--loopback] [--tolerance 0.05]
@@ -37,7 +38,19 @@ std::string wide_to_utf8(const wchar_t* w) {
     return s;
 }
 
-void cmd_enum() {
+const char* state_name(DWORD s) {
+    switch (s) {
+    case DEVICE_STATE_ACTIVE: return "active";
+    case DEVICE_STATE_DISABLED: return "disabled";
+    case DEVICE_STATE_NOTPRESENT: return "notpresent";
+    case DEVICE_STATE_UNPLUGGED: return "unplugged";
+    default: return "unknown";
+    }
+}
+
+// all=false: only active endpoints, no "state" field (the format the auto test parses).
+// all=true : every endpoint in every state with a "state" field - diagnostics for "the device is bound but no endpoint shows up".
+void cmd_enum(bool all) {
     CoInit co;
     IMMDeviceEnumerator* en = nullptr;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
@@ -47,7 +60,7 @@ void cmd_enum() {
     }
     for (int flow = 0; flow < 2; ++flow) {
         IMMDeviceCollection* col = nullptr;
-        en->EnumAudioEndpoints(flow ? eCapture : eRender, DEVICE_STATE_ACTIVE, &col);
+        en->EnumAudioEndpoints(flow ? eCapture : eRender, all ? DEVICE_STATEMASK_ALL : DEVICE_STATE_ACTIVE, &col);
         UINT n = 0;
         if (col) col->GetCount(&n);
         for (UINT i = 0; i < n; ++i) {
@@ -62,8 +75,15 @@ void cmd_enum() {
             std::string name;
             if (ps && SUCCEEDED(ps->GetValue(PKEY_Device_FriendlyName, &pv)))
                 name = wide_to_utf8(pv.pwszVal);
-            printf("{\"flow\":\"%s\",\"id\":\"%s\",\"name\":\"%s\"}\n",
-                   flow ? "capture" : "render", wide_to_utf8(id).c_str(), name.c_str());
+            if (all) {
+                DWORD st = 0;
+                d->GetState(&st);
+                printf("{\"flow\":\"%s\",\"id\":\"%s\",\"name\":\"%s\",\"state\":\"%s\"}\n",
+                       flow ? "capture" : "render", wide_to_utf8(id).c_str(), name.c_str(), state_name(st));
+            } else {
+                printf("{\"flow\":\"%s\",\"id\":\"%s\",\"name\":\"%s\"}\n",
+                       flow ? "capture" : "render", wide_to_utf8(id).c_str(), name.c_str());
+            }
             if (ps) { PropVariantClear(&pv); ps->Release(); }
             CoTaskMemFree(id);
             d->Release();
@@ -71,6 +91,16 @@ void cmd_enum() {
         if (col) col->Release();
     }
     en->Release();
+}
+
+// Which session are we in? In a remote (RDP-style) session Windows may expose only the redirected audio device and hide
+// locally attached ones - Windows Sandbox is such a session. This is what tells "no endpoint because the driver failed"
+// apart from "no endpoint because this session cannot see local audio hardware".
+void cmd_session() {
+    DWORD sid = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &sid);
+    printf("{\"sessionId\":%lu,\"consoleSessionId\":%lu,\"remoteSession\":%s}\n", static_cast<unsigned long>(sid),
+           static_cast<unsigned long>(WTSGetActiveConsoleSessionId()), GetSystemMetrics(SM_REMOTESESSION) ? "true" : "false");
 }
 
 // volume-watch 回调
@@ -259,18 +289,20 @@ int main(int argc, char** argv) {
     const std::string cmd = argv[1];
     int seconds = 10;
     double freq = 1000.0, tolerance = 0.05;
-    bool loopback = false;
+    bool loopback = false, all = false;
     std::string endpoint;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (a == "--seconds") seconds = atoi(next().c_str());
+        if (a == "--all") all = true;
+        else if (a == "--seconds") seconds = atoi(next().c_str());
         else if (a == "--freq") freq = atof(next().c_str());
         else if (a == "--endpoint") endpoint = next();
         else if (a == "--loopback") loopback = true;
         else if (a == "--tolerance") tolerance = atof(next().c_str());
     }
-    if (cmd == "enum") { cmd_enum(); return 0; }
+    if (cmd == "enum") { cmd_enum(all); return 0; }
+    if (cmd == "session") { cmd_session(); return 0; }
     if (cmd == "volume-watch") return cmd_volume_watch(seconds, endpoint);
     if (cmd == "notify-watch") return cmd_notify_watch(seconds);
     if (cmd == "capture") return cmd_capture(freq, seconds, endpoint, loopback, tolerance);
