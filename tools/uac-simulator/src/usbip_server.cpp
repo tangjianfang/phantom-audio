@@ -1,6 +1,7 @@
 // USB/IP server 传输层实现（Winsock2，仅 127.0.0.1，多设备并发通道）
 #include <uac/usbip_server.h>
 #include <uac/endian.h>
+#include <uac/net_util.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <atomic>
@@ -13,46 +14,19 @@
 
 namespace uac {
 
-namespace {
+namespace { // anonymous
+    using net::send_all;
+    using net::recv_all;
 
 std::once_flag g_wsa_once;
 void wsa_init_once() {
-    std::call_once(g_wsa_once, [] {
-        WSADATA d;
-        WSAStartup(MAKEWORD(2, 2), &d);
-        // 故意不 WSACleanup：进程级生命周期
-    });
+    std::call_once(g_wsa_once, [] { WSADATA d; WSAStartup(MAKEWORD(2, 2), &d); });
 }
 
-bool send_all(SOCKET s, std::span<const unsigned char> b) {
-    size_t off = 0;
-    while (off < b.size()) {
-        int n = ::send(s, reinterpret_cast<const char*>(b.data() + off),
-                       static_cast<int>(b.size() - off), 0);
-        if (n <= 0) return false;
-        off += static_cast<size_t>(n);
-    }
-    return true;
-}
 
-bool recv_all(SOCKET s, unsigned char* p, size_t n) {
-    size_t off = 0;
-    while (off < n) {
-        int r = ::recv(s, reinterpret_cast<char*>(p + off), static_cast<int>(n - off), 0);
-        if (r <= 0) return false;
-        off += static_cast<size_t>(r);
-    }
-    return true;
-}
 
-// Receive timeout on accepted sockets (ms): lets serve loops be interrupted
-// by stopping without mirroring the socket handle anywhere.
-void set_recv_timeout(SOCKET s, int ms) {
-    DWORD v = static_cast<DWORD>(ms);
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&v), sizeof(v));
-}
 
-bool last_recv_was_timeout() { return WSAGetLastError() == WSAETIMEDOUT; }
+
 
 } // namespace
 
@@ -119,18 +93,24 @@ struct UsbIpServer::Impl {
     // 控制连接（DEVLIST / IMPORT 握手）；IMPORT 成功则启动通道线程并返回
     void serve_control(SOCKET s) {
         using namespace usbip;
-        // 250ms receive timeout + stopping recheck: stop() needs no socket
-        // mirroring (which raced and double-closed) to interrupt a stalled
-        // peer — the loop simply exits on timeout once stopping is set.
-        set_recv_timeout(s, 250);
+        // 250ms receive timeout + stopping recheck (tri-state read keeps
+        // partial bytes across timeouts, so a throttled client splitting an
+        // 8-byte header does not misalign the stream).
+        net::set_recv_timeout(s, 250);
+        unsigned char common[8];
+        std::size_t off = 0;
         for (;;) {
-            unsigned char common[8];
-            if (!recv_all(s, common, sizeof(common))) {
-                // Timeout on an idle-but-open peer: keep waiting (stopping
-                // ends the wait). Clean close / reset: serve the next client
-                // immediately instead of spinning on recv()==0.
-                if (last_recv_was_timeout() && !stopping.load()) continue;
+            switch (net::recv_until(s, common, sizeof(common), off)) {
+            case net::RecvResult::Ok:
+                off = 0;
                 break;
+            case net::RecvResult::Timeout:
+                if (!stopping.load()) continue; // idle-but-open peer
+                closesocket(s);
+                return;
+            case net::RecvResult::Closed:
+                closesocket(s);
+                return;
             }
             if (uac::rd_be<uint16_t>(&common[0]) != kVersion) break;
             const auto code = uac::rd_be<uint16_t>(&common[2]);
@@ -144,7 +124,15 @@ struct UsbIpServer::Impl {
             }
             if (code == OP_REQ_IMPORT) {
                 unsigned char body[32];
-                if (!recv_all(s, body, sizeof(body))) break;
+                std::size_t boff = 0;
+                bool bodyOk = false;
+                for (;;) {
+                    const auto rr = net::recv_until(s, body, sizeof(body), boff);
+                    if (rr == net::RecvResult::Ok) { bodyOk = true; break; }
+                    if (rr == net::RecvResult::Timeout && !stopping.load()) continue;
+                    break;
+                }
+                if (!bodyOk) { closesocket(s); return; }
                 const auto busid = decode_import_busid({body, 32});
                 const std::pair<usbip::UsbIpDevice, UrbDispatcher*>* found = nullptr;
                 for (auto&& d : devices)
@@ -215,10 +203,15 @@ struct UsbIpServer::Impl {
                                   wrap_unlink(conn, cmd->basic.seqnum, UnlinkResultFn{}));
             }
         }
-        {
-            std::lock_guard lk(c.sendMtx);
-            if (c.s != INVALID_SOCKET) { shutdown(c.s, SD_BOTH); closesocket(c.s); c.s = INVALID_SOCKET; }
-        }
+        close_conn(c);
+    }
+
+    // Single-lock close for a channel socket: stop()/kick() and the urb_loop
+    // exit path both go through devMtx, so the handle can never be closed
+    // twice (a recycled handle would kill an unrelated live connection).
+    void close_conn(Conn& c) {
+        std::lock_guard lk(devMtx);
+        if (c.s != INVALID_SOCKET) { shutdown(c.s, SD_BOTH); closesocket(c.s); c.s = INVALID_SOCKET; }
     }
 
     std::shared_ptr<Conn> shared_from(Conn& c) {

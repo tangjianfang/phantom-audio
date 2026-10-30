@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     }
     host.set_log_file(logFile); // applied to every model created at attach time
     if (!initialProfile.empty()) {
-        const auto r = host.on_attach(initialProfile);
+        const auto r = host.on_attach(initialProfile, /*confineName=*/false); // --profile accepts paths
         printf("attach(%s) -> %s\n", initialProfile.c_str(), r.c_str());
     }
     std::signal(SIGINT, on_sigint);

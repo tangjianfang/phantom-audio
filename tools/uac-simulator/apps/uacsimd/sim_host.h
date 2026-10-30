@@ -23,7 +23,8 @@ public:
 
     // 控制 API 回调实现（线程安全）
     std::string on_status();
-    std::string on_attach(const std::string& profileName);
+    // confineName=false 允许绝对/相对路径（CLI --profile 契约）；HTTP 层传 true 仅允许纯名字
+    std::string on_attach(const std::string& profileName, bool confineName = true);
     std::string on_detach();
     std::string on_event(const std::string& type);
     std::string on_inject(const std::string& body); // Task 17 接入 FaultInjector

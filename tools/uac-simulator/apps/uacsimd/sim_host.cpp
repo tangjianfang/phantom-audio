@@ -66,7 +66,7 @@ std::string SimHost::on_status() {
     return j.dump();
 }
 
-std::string SimHost::on_attach(const std::string& profileName) {
+std::string SimHost::on_attach(const std::string& profileName, bool confineName) {
     std::lock_guard lk(mtx_);
     try {
         namespace fs = std::filesystem;
@@ -91,11 +91,15 @@ std::string SimHost::on_attach(const std::string& profileName) {
                 }
             }
         }
-        // Confine HTTP-supplied profile names: no absolute paths, no ".."
-        // segments (fs operator/ replaces the base on absolute inputs).
-        if (profileName.find(':') != std::string::npos ||
-            profileName.find("..") != std::string::npos)
-            return json{{"error", "invalid profile name"}}.dump();
+        // Confine HTTP-supplied profile names to plain identifiers: the
+        // filesystem operator/ replaces the base for absolute, rooted,
+        // and UNC names, so reject ANY separator (:/\) or ".." there.
+        // CLI --profile keeps full-path support via confineName=false.
+        if (confineName) {
+            const std::string bad = ":/\..";
+            if (profileName.find_first_of(bad) != std::string::npos)
+                return json{{"error", "invalid profile name"}}.dump();
+        }
         // resolve profile file inside the (possibly relocated) dir
         for (auto cand : {profileName + ".json", profileName,
                           "profiles/" + profileName + ".json"}) {

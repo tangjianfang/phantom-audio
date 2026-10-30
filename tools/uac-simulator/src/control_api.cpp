@@ -1,5 +1,6 @@
 // 控制台 API 实现：极简 HTTP/1.1 + JSON 路由（仅 127.0.0.1）
 #include <uac/control_api.h>
+#include <uac/net_util.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <atomic>
@@ -17,29 +18,12 @@ void wsa_init_once() {
 namespace uac {
 
 namespace {
-bool send_all(SOCKET s, const char* p, std::size_t n) {
-    std::size_t off = 0;
-    while (off < n) {
-        int r = ::send(s, p + off, static_cast<int>(n - off), 0);
-        if (r <= 0) return false;
-        off += static_cast<std::size_t>(r);
-    }
-    return true;
-}
-bool recv_all(SOCKET s, char* p, std::size_t n) {
-    std::size_t off = 0;
-    while (off < n) {
-        int r = ::recv(s, p + off, static_cast<int>(n - off), 0);
-        if (r <= 0) return false;
-        off += static_cast<std::size_t>(r);
-    }
-    return true;
-}
 
-// Receive timeout on accepted sockets: lets stop() interrupt a stalled peer
-void set_recv_timeout(SOCKET s, int ms) {
-    DWORD v = static_cast<DWORD>(ms);
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&v), sizeof(v));
+using net::RecvResult;
+
+bool send_all(SOCKET s, const char* p, std::size_t n) {
+    return net::send_all(s, std::span<const unsigned char>(
+                                reinterpret_cast<const unsigned char*>(p), n));
 }
 
 std::string http_response(int code, const std::string& body) {
@@ -98,8 +82,13 @@ struct ControlApi::Impl {
                 std::strtoull(head.c_str() + cl + 15, nullptr, 10));
         while (body.size() < contentLen) {
             int r = ::recv(s, buf, sizeof(buf), 0);
-            if (r <= 0) break;
-            body.append(buf, static_cast<std::size_t>(r));
+            if (r > 0) {
+                body.append(buf, static_cast<std::size_t>(r));
+                continue;
+            }
+            if (r < 0 && WSAGetLastError() == WSAETIMEDOUT && !stopping.load())
+                continue;
+            break;
         }
         body.resize(std::min(body.size(), contentLen));
 
