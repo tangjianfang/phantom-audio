@@ -53,6 +53,10 @@ DeviceSnapshot make_uac2_default_snapshot() {
 }
 
 DeviceModel::~DeviceModel() {
+    // Invariant: destroy only after all in-flight URB dispatch returned (the
+    // owning server must be stopped first - SimHost::on_detach guarantees it).
+    // The flag below narrows the delay-push race; it cannot make concurrent
+    // handle_ep0 on a destroyed object defined behavior.
     // Mark stopped under the mutex FIRST: any racer that acquires the lock
     // afterwards completes inline instead of pushing into the dying vector.
     std::vector<std::thread> pending;

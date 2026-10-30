@@ -91,6 +91,11 @@ std::string SimHost::on_attach(const std::string& profileName) {
                 }
             }
         }
+        // Confine HTTP-supplied profile names: no absolute paths, no ".."
+        // segments (fs operator/ replaces the base on absolute inputs).
+        if (profileName.find(':') != std::string::npos ||
+            profileName.find("..") != std::string::npos)
+            return json{{"error", "invalid profile name"}}.dump();
         // resolve profile file inside the (possibly relocated) dir
         for (auto cand : {profileName + ".json", profileName,
                           "profiles/" + profileName + ".json"}) {
@@ -132,11 +137,14 @@ std::string SimHost::on_attach(const std::string& profileName) {
             list.emplace_back(std::move(d), models_[i].second.get());
         }
         if (!server_.start(usbipPort_, list)) {
-            // roll back the phantom instance so /status stays truthful and
-            // retries do not burn the 4-instance quota
-            models_.pop_back();
-            model_ = models_.empty() ? nullptr : models_.back().second.get();
-            return json{{"error", "usbip listen " + std::to_string(usbipPort_) + " failed"}}
+            // The listener is dead and stop() already unplugged every client:
+            // a partial rollback would leave /status claiming listening=true
+            // with orphaned instances. Reset to empty - truthful state.
+            models_.clear();
+            model_ = nullptr;
+            current_profile_.clear();
+            return json{{"error", "usbip listen " + std::to_string(usbipPort_) +
+                                     " failed; all instances detached"}}
                 .dump();
         }
         current_profile_ = profileName;

@@ -45,6 +45,15 @@ bool recv_all(SOCKET s, unsigned char* p, size_t n) {
     return true;
 }
 
+// Receive timeout on accepted sockets (ms): lets serve loops be interrupted
+// by stopping without mirroring the socket handle anywhere.
+void set_recv_timeout(SOCKET s, int ms) {
+    DWORD v = static_cast<DWORD>(ms);
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&v), sizeof(v));
+}
+
+bool last_recv_was_timeout() { return WSAGetLastError() == WSAETIMEDOUT; }
+
 } // namespace
 
 struct UsbIpServer::Impl {
@@ -63,7 +72,6 @@ struct UsbIpServer::Impl {
     // exported devices with their owning dispatchers (busid -> pair)
     std::vector<std::pair<usbip::UsbIpDevice, UrbDispatcher*>> devices;
 
-    std::atomic<SOCKET> controlSock{INVALID_SOCKET}; // accept 线程正在服务的连接
     std::mutex devMtx; // busid → 通道（attached 即在表中）
     std::map<std::string, std::shared_ptr<Conn>> channels;
     std::vector<std::thread> channelThreads; // stop() 统一 join
@@ -111,10 +119,19 @@ struct UsbIpServer::Impl {
     // 控制连接（DEVLIST / IMPORT 握手）；IMPORT 成功则启动通道线程并返回
     void serve_control(SOCKET s) {
         using namespace usbip;
-        controlSock.store(s); // stop() 会 shutdown 它以打断阻塞 recv
+        // 250ms receive timeout + stopping recheck: stop() needs no socket
+        // mirroring (which raced and double-closed) to interrupt a stalled
+        // peer — the loop simply exits on timeout once stopping is set.
+        set_recv_timeout(s, 250);
         for (;;) {
             unsigned char common[8];
-            if (!recv_all(s, common, sizeof(common))) break;
+            if (!recv_all(s, common, sizeof(common))) {
+                // Timeout on an idle-but-open peer: keep waiting (stopping
+                // ends the wait). Clean close / reset: serve the next client
+                // immediately instead of spinning on recv()==0.
+                if (last_recv_was_timeout() && !stopping.load()) continue;
+                break;
+            }
             if (uac::rd_be<uint16_t>(&common[0]) != kVersion) break;
             const auto code = uac::rd_be<uint16_t>(&common[2]);
 
@@ -268,8 +285,6 @@ void UsbIpServer::stop() {
         for (auto&& [busid, c] : impl_->channels)
             if (c->s != INVALID_SOCKET) { shutdown(c->s, SD_BOTH); closesocket(c->s); c->s = INVALID_SOCKET; }
     }
-    SOCKET cs = impl_->controlSock.exchange(INVALID_SOCKET);
-    if (cs != INVALID_SOCKET) { shutdown(cs, SD_BOTH); closesocket(cs); }
     if (impl_->acceptThread.joinable()) impl_->acceptThread.join();
     for (auto& t : impl_->channelThreads)
         if (t.joinable()) t.join();
