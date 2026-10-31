@@ -586,7 +586,12 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         g_lblLog.create(h, 905, L"STATIC", L"Request log (NDJSON, refreshed every 0.5 s)", vis, 0,
                         cs->hInstance, g_fUi);
         g_logEdit.create(h, ID_LOG, L"EDIT", nullptr,
-                         vis | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                         // 不换行：EDIT 的自动换行让每次 SetWindowTextW 都做全文 ScriptItemize
+                         // 布局，风暴期间 0.5s 一整块 200 行长 JSON 直接把 UI 线程烧满（真机
+                         // 2026-11-01 cdb 栈：SetWindowTextW→ECSetText→MLBuildchLines→ECWord）。
+                         // NDJSON 行本来就按行读，横向滚动即可。
+                         vis | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
+                             ES_AUTOHSCROLL | ES_READONLY,
                          WS_EX_CLIENTEDGE, cs->hInstance, g_fMono);
         g_status.create(h, ID_STATUS, L"STATIC", L"", vis | SS_ENDELLIPSIS | SS_LEFTNOWORDWRAP, 0,
                         cs->hInstance, g_fUi);
