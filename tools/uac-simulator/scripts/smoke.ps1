@@ -107,7 +107,7 @@ function Test-UiResponsive([string[]]$ArgList, [string]$Label, [int]$Seconds = 7
 $deadPort = '39991'   # 没人监听：阻塞式 connect 会白等约 2 秒
 $problems = @()
 foreach ($case in @(
-        @{ Label = '主窗口（没有 uacsimd）'; Args = @('--port', $deadPort) },
+        @{ Label = '主窗口（没有 uacsimd）'; Args = @('--port', $deadPort, '--no-env-check') },
         @{ Label = '环境自检模态窗口（没有 uacsimd）'; Args = @('--port', $deadPort, '--env-check') })) {
     $r = Test-UiResponsive $case.Args $case.Label
     if ($r) { $problems += $r }
@@ -151,7 +151,7 @@ $cleanup = New-Object System.Collections.Generic.List[int]   # 出错也要收�
 try {
     # --- A) 正常关窗
     $port = Get-FreePort
-    $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port, '--start-simulator') -PassThru
+    $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port, '--start-simulator', '--no-env-check') -PassThru
     $cleanup.Add($gui.Id)
     if (-not (Wait-Until { Test-SimUp $port } 20)) { $lifecycle += 'A) --start-simulator：20 秒内模拟器没有起来' }
     else {
@@ -171,7 +171,7 @@ try {
 
     # --- B) GUI 被强杀
     $port = Get-FreePort
-    $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port, '--start-simulator') -PassThru
+    $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port, '--start-simulator', '--no-env-check') -PassThru
     $cleanup.Add($gui.Id)
     if (-not (Wait-Until { Test-SimUp $port } 20)) { $lifecycle += 'B) --start-simulator：20 秒内模拟器没有起来' }
     else {
@@ -192,7 +192,7 @@ try {
     $cleanup.Add($foreign.Id)
     if (-not (Wait-Until { Test-SimUp $port } 20)) { $lifecycle += 'C) 手动启动的 uacsimd 20 秒内没有起来' }
     else {
-        $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port) -PassThru
+        $gui = Start-Process -FilePath $Exe -ArgumentList @('--port', $port, '--no-env-check') -PassThru
         $cleanup.Add($gui.Id)
         Start-Sleep -Seconds 2
         $null = $gui.Refresh(); [void]$gui.CloseMainWindow()

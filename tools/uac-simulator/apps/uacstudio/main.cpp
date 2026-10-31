@@ -15,9 +15,11 @@
 //   scripts/smoke.ps1 launches the real GUI against a closed port and probes the UI thread with SendMessageTimeout.
 //
 // Command line:
-//   uacstudio.exe [--port N] [--env-check] [--start-simulator]
+//   uacstudio.exe [--port N] [--env-check] [--no-env-check] [--start-simulator]
 //                                            open the window (--env-check: show the environment check first;
-//                                            --start-simulator: start uacsimd.exe next to it, stopped again on exit)
+//                                            --no-env-check: never show it, also on a first run - automation
+//                                            needs a plain window it can close; --start-simulator: start
+//                                            uacsimd.exe next to it, stopped again on exit)
 //   uacstudio.exe --selftest                 non-visual self check (per-control pixel statistics + geometry audit +
 //                                            controller logic); report in %TEMP%\uacstudio-selftest.txt; exit 0/3/4/5
 //   uacstudio.exe --autotest [--port N] [--out DIR] [--exe-dir DIR] [--allow-host] [--profile NAME]
@@ -934,7 +936,10 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nCmdShow) {
     UpdateWindow(g_main);
     if (!g_selfTest && HasArg(L"--start-simulator")) StartSimulatorAtLaunch(g_main);
     // No modal dialog in self-check mode: nobody is there to click it
-    if (!g_selfTest && (uacstudio::IsFirstRun() || HasArg(L"--env-check"))) {
+    // --no-env-check lets automation (smoke.ps1) suppress the first-run modal: with the modal up, a WM_CLOSE sent to
+    // the disabled owner window cannot destroy it and the process would hang around after CloseMainWindow().
+    if (!g_selfTest &&
+        (HasArg(L"--env-check") || (uacstudio::IsFirstRun() && !HasArg(L"--no-env-check")))) {
         uacstudio::ShowEnvCheck(g_main, g_port);
         PokePoller();
     }
