@@ -48,13 +48,23 @@ bool AcProcessor::has_endpoint(std::uint8_t address) const {
 
 void AcProcessor::log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
                           std::uint16_t wIndex, std::uint16_t wLength, const char* outcome,
-                          std::size_t n) {
+                          std::size_t n, const std::uint8_t* outData, std::size_t outLen) {
+    std::string data;
+    if ((bmRequestType & 0x80) == 0 && outData && outLen) { // host-to-device: record what was written
+        static constexpr char kHex[] = "0123456789abcdef";
+        data = ",\"data\":\"";
+        for (std::size_t i = 0; i < outLen && i < 8; ++i) {
+            data += kHex[outData[i] >> 4];
+            data += kHex[outData[i] & 0xf];
+        }
+        data += "\"";
+    }
     log_.append("{\"ts\":" + std::to_string(now_ms()) +
                 ",\"bmRequestType\":" + std::to_string(bmRequestType) +
                 ",\"bRequest\":" + std::to_string(bRequest) +
                 ",\"wValue\":" + std::to_string(wValue) +
                 ",\"wIndex\":" + std::to_string(wIndex) +
-                ",\"wLength\":" + std::to_string(wLength) +
+                ",\"wLength\":" + std::to_string(wLength) + data +
                 ",\"resp\":\"" + outcome + "\",\"n\":" + std::to_string(n) + "}");
 }
 
@@ -284,9 +294,11 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
     if (isStall) {
         res.kind = ControlResult::Kind::Stall;
         res.data.clear();
-        log_req(bmRequestType, bRequest, wValue, wIndex, wLength, "stall", 0);
+        log_req(bmRequestType, bRequest, wValue, wIndex, wLength, "stall", 0, outData.data(),
+                outData.size());
     } else {
-        log_req(bmRequestType, bRequest, wValue, wIndex, wLength, "ok", res.data.size());
+        log_req(bmRequestType, bRequest, wValue, wIndex, wLength, "ok", res.data.size(),
+                outData.data(), outData.size());
     }
     return res;
 }

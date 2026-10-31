@@ -65,7 +65,8 @@ private:
     std::uint8_t clockId_ = 4;
 
     void log_req(std::uint8_t bmRequestType, std::uint8_t bRequest, std::uint16_t wValue,
-                 std::uint16_t wIndex, std::uint16_t wLength, const char* outcome, std::size_t n);
+                 std::uint16_t wIndex, std::uint16_t wLength, const char* outcome, std::size_t n,
+                 const std::uint8_t* outData = nullptr, std::size_t outLen = 0);
     bool has_endpoint(std::uint8_t address) const;
 };
 

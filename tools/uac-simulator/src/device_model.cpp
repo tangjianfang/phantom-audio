@@ -198,6 +198,7 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     }
     if (fault_.should_stall(setup[0], setup[1])) {
         log_.append("{\"event\":\"fault_stall\"}");
+        ++cStall_;
         Completion cm;
         cm.ret.status = -32; // -EPIPE
         complete(std::move(cm));
@@ -220,8 +221,10 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     }
     Completion cm;
     if (r.kind == ControlResult::Kind::Stall) {
+        ++cStall_;
         cm.ret.status = -32; // -EPIPE（STALL 的 Linux errno）
     } else {
+        ++cOk_;
         cm.ret.actual_length = static_cast<std::uint32_t>(r.data.size());
         cm.payload = std::move(r.data);
     }
@@ -252,15 +255,49 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
     complete(std::move(cm));
 }
 
+std::string DeviceModel::urb_stats_line() {
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    auto d = [](std::atomic<uint64_t>& c) { return c.exchange(0); };
+    const uint64_t ep0 = d(cEp0_), ok = d(cOk_), stall = d(cStall_), int81 = d(cInt81_),
+                   hid82 = d(cHid82_), fb84 = d(cFb84_), iso86 = d(cIso86_), iso06 = d(cIso06_),
+                   unk = d(cUnk_), unl = d(cUnlink_);
+    if (!ep0 && !ok && !stall && !int81 && !hid82 && !fb84 && !iso86 && !iso06 && !unk && !unl)
+        return {}; // idle second: no line, so the GUI log tail stays readable
+    std::size_t heldInt, heldHid;
+    {
+        std::lock_guard lk(mtx_);
+        heldInt = heldInterrupts_.size();
+        heldHid = heldHid_.size();
+    }
+    return "{\"ts\":" + std::to_string(ts) + ",\"event\":\"urb_stats\""
+           + ",\"ep0\":" + std::to_string(ep0)
+           + ",\"ok\":" + std::to_string(ok)
+           + ",\"stall\":" + std::to_string(stall)
+           + ",\"int81\":" + std::to_string(int81)
+           + ",\"hid82\":" + std::to_string(hid82)
+           + ",\"fb84\":" + std::to_string(fb84)
+           + ",\"iso86\":" + std::to_string(iso86)
+           + ",\"iso06\":" + std::to_string(iso06)
+           + ",\"unk\":" + std::to_string(unk)
+           + ",\"unl\":" + std::to_string(unl)
+           + ",\"heldInt\":" + std::to_string(heldInt)
+           + ",\"heldHid\":" + std::to_string(heldHid)
+           + "}";
+}
+
 void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned char> payload,
                          std::span<const usbip::IsoPacket> isoDescs, CompletionFn complete) {
     if (cmd.basic.ep == 0) {
+        ++cEp0_;
         handle_ep0(cmd, payload, std::move(complete));
         return;
     }
     const std::uint8_t epAddr = static_cast<std::uint8_t>(
         (cmd.basic.direction == usbip::DIR_IN ? 0x80 : 0x00) | cmd.basic.ep);
     if (epAddr == 0x84) { // UAC2 explicit feedback IN: current Q16.16 value (High-Speed)
+        ++cFb84_;
         const auto fb = AsEngine::fb_value_16_16(snap_.ac.sampleRate);
         Completion cm;
         cm.ret.actual_length = 4;
@@ -270,6 +307,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     if (epAddr == 0x86) { // 麦克风 iso IN：包一层 iso error_count 注入
+        ++cIso86_;
         auto wrapped = [this, complete = std::move(complete)](Completion&& cm) mutable {
             if (auto ec = fault_.iso_error_count()) cm.ret.error_count = ec;
             complete(std::move(cm));
@@ -278,6 +316,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     if (epAddr == 0x82 && snap_.hidConsumerVolume) { // HID 中断 IN：按键报告
+        ++cHid82_;
         std::vector<std::uint8_t> report;
         {
             std::lock_guard lk(mtx_);
@@ -298,6 +337,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     if (epAddr == 0x81) { // AC 中断 IN（Status Word）：有挂起通知立即回，否则挂起
+        ++cInt81_;
         if (auto w = injector_.poll_interrupt_in()) {
             Completion cm;
             cm.ret.actual_length = static_cast<std::uint32_t>(w->size());
@@ -310,6 +350,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     if (epAddr == 0x06) { // 扬声器 iso OUT：立即确认 + 数据交引擎
+        ++cIso06_;
         engine_.on_iso_out(payload, isoDescs);
         Completion cm;
         cm.ret.status = 0;
@@ -325,6 +366,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
         return;
     }
     // 未知端点：STALL
+    ++cUnk_;
     Completion cm;
     cm.ret.status = -32;
     complete(std::move(cm));
@@ -332,6 +374,7 @@ void DeviceModel::on_urb(const usbip::UrbCommand& cmd, std::span<const unsigned 
 
 void DeviceModel::on_unlink(std::uint32_t /*seqnum*/, std::uint32_t unlink_seqnum,
                             UnlinkResultFn done) {
+    ++cUnlink_;
     { // 先取消挂起的中断提交（AC Status Word 0x81 与 HID 0x82）
         std::lock_guard lk(mtx_);
         for (auto it = heldInterrupts_.begin(); it != heldInterrupts_.end(); ++it)

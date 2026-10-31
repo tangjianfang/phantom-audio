@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
     fflush(stdout);
 
     const char* why = "stopped";
+    int statsTick = 0;
     while (g_run.load()) {
         if (host.shutdown_requested()) {
             why = "stopped (shutdown requested over the control API)";
@@ -83,6 +84,10 @@ int main(int argc, char** argv) {
         if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0) {
             why = "stopped (the parent process exited)";
             break;
+        }
+        if (++statsTick >= 5) { // 5 x 200 ms: per-second URB statistics into the device log
+            statsTick = 0;
+            host.dump_urb_stats();
         }
         Sleep(200);
     }
