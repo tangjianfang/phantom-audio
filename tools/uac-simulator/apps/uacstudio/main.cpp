@@ -748,8 +748,14 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             g_testThread = std::thread([h] {
                 uacstudio::AutoTestOptions o;
                 o.port = g_port;
-                // host.* cases attach a virtual USB sound card to this Windows: only enabled on a disposable machine
-                o.allowHost = uacstudio::IsDisposableMachine();
+                // host.* cases attach a virtual USB sound card to this Windows. The one-click button must run
+                // them whenever the machine allows it (elevated + disposable/UACSIM_FORCE_HOST_TESTS=1) -
+                // IsDisposableMachine() alone ignored the env override, so the dev machine never ran host.*
+                // from the GUI even when everything was in place. HostCasesAllowed also checks elevation
+                // (usbip attach needs admin); when it declines, the cases SKIP with the reason.
+                std::string hostWhy;
+                o.allowHost = uacstudio::HostCasesAllowed(true, &hostWhy);
+                PushLine(h, std::string("host cases: ") + (o.allowHost ? "enabled" : "skipped - " + hostWhy));
                 o.cancel = &g_testCancel; // checked between cases; the cleanup case still runs
                 o.log = [h](const std::string& line) { PushLine(h, line); };
                 const auto out = uacstudio::RunAutoTest(o);
