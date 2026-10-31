@@ -4,15 +4,44 @@
 #include <uac/version.h>
 #include <nlohmann/json.hpp>
 #include <windows.h>
+#include <algorithm>
+#include <set>
 
 namespace uac {
 
 using nlohmann::json;
 
+namespace {
+// profiles/<name>.json 缺席时仍内置提供的 profile。is_builtin_profile() 与 on_attach 的兜底共用
+// 这张表，名单只此一处；其余名字（uac2-48k / uac2-hid-headset / uac1-razer-clio）只能来自
+// exe 旁部署的 profiles/ 目录，部署由 CMake POST_BUILD 与打包脚本负责。
+const std::vector<std::pair<std::string, DeviceSnapshot (*)()>>& builtinProfiles() {
+    static const std::vector<std::pair<std::string, DeviceSnapshot (*)()>> k = {
+        {"uac1-cmedia-sim", &make_uac1_default_snapshot},
+        {"uac1-hid-sim", &make_uac1_hid_snapshot},
+        {"uac2-sim", &make_uac2_default_snapshot},
+    };
+    return k;
+}
+} // namespace
+
+bool is_builtin_profile(const std::string& name) {
+    for (const auto& b : builtinProfiles())
+        if (b.first == name) return true;
+    return false;
+}
+
 SimHost::SimHost(std::string profilesDir) : profiles_dir_(std::move(profilesDir)) {}
 
-bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {
-    usbipPort_ = usbipPort; // store BEFORE any listen can use the member
+void SimHost::dump_urb_stats() {
+    std::lock_guard lk(mtx_);
+    for (auto& m : models_) {
+        auto line = m.second->urb_stats_line();
+        if (!line.empty()) m.second->log().append(line);
+    }
+}
+
+bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {    usbipPort_ = usbipPort; // store BEFORE any listen can use the member
     ControlCallbacks cb;
     cb.status = [this] { return on_status(); };
     cb.log_tail = [this](std::size_t n) {
@@ -110,14 +139,25 @@ std::string SimHost::on_attach(const std::string& profileName, bool confineName)
         DeviceSnapshot snap;
         if (!path.empty()) {
             snap = build_snapshot(load_profile(path));
-        } else if (profileName == "uac1-cmedia-sim") {
-            snap = make_uac1_default_snapshot();
-        } else if (profileName == "uac1-hid-sim") {
-            snap = make_uac1_hid_snapshot();
-        } else if (profileName == "uac2-sim") {
-            snap = make_uac2_default_snapshot();
         } else {
-            return json{{"error", "profile not found: " + profileName}}.dump();
+            const auto& builtin = builtinProfiles();
+            const auto it = std::find_if(builtin.begin(), builtin.end(),
+                                         [&](const auto& e) { return e.first == profileName; });
+            if (it == builtin.end())
+                return json{{"error", "profile not found: " + profileName}}.dump();
+            snap = it->second();
+        }
+        // 实测（Win11 26200, usbaudio2.sys）：UAC2 时钟源只宣告一个采样率时，Windows 的音频功能
+        // 直接 code 10 不启动（枚举走完、无端点，Windows 只反复重问 RANGE）。与其静默产出一个
+        // 在真机上起不来的设备，不如在 attach 时就拒绝并说清楚。
+        if (snap.protocol == Protocol::Uac2) {
+            const std::set<std::uint32_t> distinctRates(snap.rates.begin(), snap.rates.end());
+            if (distinctRates.size() < 2)
+                return json{{"error",
+                             "uac2 profile needs at least 2 distinct sample rates (usbaudio2.sys "
+                             "starts no audio function for a single-rate clock on Windows; add e.g. "
+                             "44100 next to 48000)"}}
+                    .dump();
         }
         if (models_.size() >= 4)
             return json{{"error", "instance limit reached: 4 (the number of vhci ports)"}}.dump();

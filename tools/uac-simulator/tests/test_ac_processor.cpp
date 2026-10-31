@@ -173,8 +173,9 @@ TEST_CASE("log store ring behavior") {
 TEST_CASE("uac2 clock source CUR/RANGE negotiation") {
     AcState st; LogStore log; AcProcessor ac(st, log);
     uac2::Uac2Profile p;
+    p.rates = {44100, 48000, 96000};    // 显式三档（默认已改为 {48000,44100}，见 desc_uac2.h 的实测注释）
     ac.set_protocol(Protocol::Uac2);
-    ac.set_rates(p.rates);              // {44100, 48000, 96000}
+    ac.set_rates(p.rates);
     ac.set_clock_id(uac2::kClock);
     ac.set_feature_unit_ids({uac2::kFuSpeaker, uac2::kFuMic});
     ac.set_descriptors(uac2::build_device_desc_encoded(p), uac2::build_config_desc(p),

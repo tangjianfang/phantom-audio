@@ -18,7 +18,10 @@ struct Uac2Profile {
     std::string serial;
 
     std::uint8_t channels = 2;
-    std::vector<std::uint32_t> rates = {44100, 48000, 96000};
+    // 默认 {48000,44100}：实测（Win11 26200, usbaudio2.sys）单一速率的时钟源让音频功能
+    // code 10 不启动；{48000,44100,96000} 三档组合会触发 ~400 次/秒 的 SET_CUR(采样率)
+    // 风暴（设置页卡顿闪烁）。两档且不含第三档时安静。详见 docs/runbook.md。
+    std::vector<std::uint32_t> rates = {48000, 44100};
     struct {
         std::uint8_t subslot = 4; // 4 字节槽
         std::uint8_t bits = 32;

@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <nlohmann/json.hpp>
 #include <sim_host.h>
+#include <controller.h>
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -92,6 +93,32 @@ TEST_CASE("sim host: valid-but-unknown name reports not found (filter passed, lo
     Host host;
     const auto r = host.attach("no-such-profile");
     CHECK(r.value("error", "").find("profile not found") == 0);
+}
+
+// 实测（Win11 26200, usbaudio2.sys）：UAC2 时钟源单采样率 → Windows 音频功能 code 10 不启动。
+// attach 必须拒绝这种 profile 而不是静默产出一个真机上起不来的设备。临时写一个单速率 profile
+// 到 %TEMP%（真源 profiles/ 的所有 uac2 profile 都已保证 ≥2 档）。
+TEST_CASE("sim host: uac2 profile with a single rate is refused with a clear reason") {
+    namespace fs = std::filesystem;
+    char tmp[MAX_PATH]{};
+    GetTempPathA(MAX_PATH, tmp);
+    const fs::path bad = fs::path(tmp) / "uac_test_single_rate.json";
+    {
+        std::ofstream f(bad);
+        f << R"({"protocol":"uac2","usb":{"vid":"0x1D50","pid":"0x9999"},)"
+             R"("audio":{"channels":2,"rates":[48000],"subslot":4,"bits":32,)"
+             R"("volumeDb":{"min":-24.0,"max":0.0,"res":1.0},"micIn":true,"spkOut":true,)"
+             R"("acInterruptEp":true,"feedbackEp":true},"hid":{"consumerVolume":false}})";
+    }
+    Host host;
+    const auto r = host.attach(bad.string(), /*confine=*/false);
+    CHECK(r.value("error", "").find("at least 2 distinct sample rates") != std::string::npos);
+    CHECK(host.h.instance_count() == 0); // 拒绝不留状态
+    std::filesystem::remove(bad);
+    // 反例：去掉违规点（两档）后同一个文件名下通过（uac2-48k 现在是 [48000,44100]）
+    const auto ok = host.attach("uac2-48k");
+    CHECK(ok.value("attached", "") == "uac2-48k");
+    CHECK(ok.value("instances", 0) >= 1);
 }
 
 TEST_CASE("sim host: CLI path (confineName=false) still accepts a full path") {
@@ -208,4 +235,25 @@ TEST_CASE("sim host: log file option applies to models attached afterwards") {
     host.h.on_detach(); // 析构模型，刷出文件
     CHECK(std::filesystem::exists(logf));
     std::filesystem::remove(logf);
+}
+
+// 部署契约：GUI 下拉的每个名字都必须能在运行时解析——exe 旁有 profiles/<name>.json，或属于内置表。
+// uac2-48k / uac2-hid-headset / uac1-razer-clio 只以文件形式存在：开发树忘了部署（CMake POST_BUILD
+// copy）时这里必须红。起因：GUI 选 uac1-razer-clio 报 "profile not found"，开发树的 build/debug 里
+// 没有 profiles/，exe 目录 fallback 链也够不到源码树（Sandbox zip 部署了才一直没暴露）。
+TEST_CASE("sim host: every GUI profile name resolves from the exe-side profiles dir or is built-in") {
+    wchar_t exe[MAX_PATH]{};
+    REQUIRE(GetModuleFileNameW(nullptr, exe, MAX_PATH) != 0);
+    const std::filesystem::path exeDir = std::filesystem::path(exe).parent_path();
+    for (const auto& wname : uacstudio::ProfileNames()) {
+        std::string name; // 名单是纯 ASCII（policy 白名单约束），逐字符窄化是安全的
+        name.reserve(wname.size());
+        for (wchar_t c : wname) name.push_back(static_cast<char>(c));
+        const bool deployed = std::filesystem::exists(exeDir / "profiles" / (name + ".json"));
+        const bool resolvable = deployed || uac::is_builtin_profile(name); // doctest 条件里不许 ||
+        REQUIRE_MESSAGE(resolvable,
+                        "GUI offers '" << name << "' but uacsimd cannot resolve it: no "
+                                       << (exeDir / "profiles" / (name + ".json")).string()
+                                       << " and not built-in");
+    }
 }

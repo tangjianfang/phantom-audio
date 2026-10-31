@@ -40,7 +40,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1      # GUI
 
 ## 硬规则
 
-1. **不在开发机上做真机测试。** 不要在开发机运行 `elevated-install-driver.ps1`、`run-host-cases.ps1`、`usbip attach`，也不要把 `--allow-host` 加到开发机的 `--autotest` 上。这些脚本/用例有一次性机器守卫（`scripts/disposable.ps1`、`IsDisposableMachine()`）会拒绝；不要为了"跑通"去绕它（`-AllowNonDisposable`、`UACSIM_FORCE_HOST_TESTS=1`）。宿主侧验证走 `build.bat` 生成的 zip（拷进 Sandbox）或 `sandbox/launch-sandbox.ps1`。**守卫必须放在"步骤失败只记录、继续跑"的包装之外**：早期的 `run-in-sandbox.ps1` 把守卫写成了一个可失败的步骤，守卫失败后脚本照样往下跑（只因后续步骤碰巧都失败才没出事）。测试这类脚本时，确认你运行的是**刚生成的**副本，而不是上一轮遗留的暂存目录。
+1. **开发机允许真机测试，但必须显式开启（2026-11-01 用户决定，usbip-win2 0.9.8.1 已装并实跑验证）。** 默认仍被一次性机器守卫拒绝（`scripts/disposable.ps1`、`IsDisposableMachine()`）；旁路只有两个正规开关：进程环境变量 **`UACSIM_FORCE_HOST_TESTS=1`**（解锁 GUI 的 Attach/Detach to Windows 与 `--autotest --allow-host` 的 host.* 用例，`auto_test.cpp` 的 `HostCasesAllowed`）和脚本的 **`-AllowNonDisposable`**（`elevated-install-driver.ps1`、`run-host-cases.ps1`）。要点：`usbip attach` 需要**管理员**（非提权进程必败，`host_ops.cpp` 会提示）；提权跑 `elevated-install-driver.ps1` 在非一次性机器上会**先建系统还原点**（别加 `-NoRestorePoint`）；装完可能要求重启（退出码 3010）。宿主侧验证仍可走 `build.bat` 的 zip + Sandbox（不装驱动的机器）。**守卫必须放在"步骤失败只记录、继续跑"的包装之外**：早期的 `run-in-sandbox.ps1` 把守卫写成了一个可失败的步骤，守卫失败后脚本照样往下跑。测试这类脚本时，确认你运行的是**刚生成的**副本，而不是上一轮遗留的暂存目录。
 2. **只能在目标系统验证的功能必须带一键自动测试。** 新功能 = 往 `apps/uacstudio/auto_test.cpp` 的 `Cases()` 加用例（不要另起按钮/脚本），并保持 `tests/test_auto_test.cpp` 的完整性检查通过（id 唯一、有说明、清理在最后、host.* 都 SKIP 守卫）。做不到自动验证的写进 `ManualChecklist()`，不要悄悄省略。
 3. **检查要有牙齿。** 凡是"设了某个值让检查通过"的功能，要有对称的反例：去掉它检查必须失败。新增安全/超时/过滤规则时，写"违规 → 拒绝"和"同一请求去掉违规点 → 通过"两侧，并至少做一次变异验证（临时改回缺陷版本，确认新测试会红，再恢复）。
 4. **不做视觉审查。** UI 改动：编译通过 + `smoke.ps1` 通过即停，并明确列出"哪些界面没人看过"。不要为外观自行截图。

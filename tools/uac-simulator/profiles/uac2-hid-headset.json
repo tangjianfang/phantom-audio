@@ -10,14 +10,23 @@
   },
   "audio": {
     "channels": 2,
-    "rates": [48000],
+    "rates": [
+      48000,
+      44100
+    ],
     "subslot": 2,
     "bits": 16,
-    "volumeDb": { "min": -30.0, "max": 0.0, "res": 2.0 },
+    "volumeDb": {
+      "min": -30.0,
+      "max": 0.0,
+      "res": 2.0
+    },
     "micIn": true,
     "spkOut": true,
     "acInterruptEp": false,
     "feedbackEp": true
   },
-  "hid": { "consumerVolume": true }
+  "hid": {
+    "consumerVolume": true
+  }
 }
