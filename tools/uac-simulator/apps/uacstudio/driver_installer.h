@@ -81,6 +81,10 @@ struct InstallOptions {
 
 std::string DefaultInstallDir();
 
+// 本进程令牌是否带启用的 Administrators 组（UAC 未提权 = false；UAC 关闭/已提权 = true）。
+// host.* 用例与 Attach to Windows 都需要它：usbip attach 只认管理员。
+bool IsProcessAdmin();
+
 // Fills every empty seam of `deps` with the real implementation (so other modules - host_ops - share the same defaults).
 InstallDeps ResolveDeps(InstallDeps deps);
 

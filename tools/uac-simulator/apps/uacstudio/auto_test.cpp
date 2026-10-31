@@ -352,6 +352,14 @@ bool HostCasesAllowed(bool flag, std::string* why) {
         if (why) *why = "host cases need --allow-host (they install nothing, but attach a virtual USB device to this Windows)";
         return false;
     }
+    // usbip attach 只认管理员：非提权时明确 SKIP（带原因），而不是跑到一半才在 usbip 步骤上失败——
+    // 一键测试在"双击启动"（非提权）下也必须给出干净的绿色结果。
+    if (!IsProcessAdmin()) {
+        if (why)
+            *why = "host cases need this process elevated (usbip attach requires administrator); "
+                   "run uacstudio as administrator to include them";
+        return false;
+    }
     std::string dwhy;
     if (IsDisposableMachine(&dwhy)) {
         if (why) *why = dwhy;

@@ -184,6 +184,8 @@ bool ContainsNoCase(const std::string& bytes, const std::string& needleLower) {
 
 } // namespace
 
+bool IsProcessAdmin() { return DefaultIsAdmin(); }
+
 // ============================================================ SHA256 / 载荷校验
 
 std::string Sha256File(const std::string& path) {

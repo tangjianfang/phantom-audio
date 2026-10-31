@@ -4,6 +4,7 @@
 // 运行器的超时/异常/清理语义用自定义用例表检验——这些逻辑不能等到 Sandbox 里才第一次运行。
 #include <doctest/doctest.h>
 #include <auto_test.h>
+#include <driver_installer.h>
 #include <sim_host.h>
 #include <windows.h>
 #include <chrono>
@@ -245,14 +246,22 @@ TEST_CASE("auto test: host cases need --allow-host AND a disposable machine") {
     CHECK_FALSE(HostCasesAllowed(false, &why));
     CHECK(why.find("--allow-host") != std::string::npos);
 
-    // 守卫逻辑本身：允许 ⇔ 一次性机器 或 显式强制。这里不假设本机是哪种（CI 的 runner 是 Hyper-V 虚拟机）。
+    // 守卫逻辑本身：允许 ⇔ (提权) 且 (一次性机器 或 显式强制)。这里不假设本机是哪种
+    //（CI 的 runner 是 Hyper-V 虚拟机），也不假设测试进程是否提权——两侧都按实际值断言。
+    const bool admin = IsProcessAdmin();
     _putenv_s("UACSIM_FORCE_HOST_TESTS", "");
     const bool disposable = IsDisposableMachine(&why);
-    CHECK(HostCasesAllowed(true, &why) == disposable);
-    if (!disposable) CHECK(why.find("refused") != std::string::npos);
+    if (admin) {
+        CHECK(HostCasesAllowed(true, &why) == disposable);
+        if (!disposable) CHECK(why.find("refused") != std::string::npos);
+    } else {
+        CHECK_FALSE(HostCasesAllowed(true, &why)); // 非提权：一律 SKIP，usbip 只认管理员
+        CHECK(why.find("administrator") != std::string::npos);
+    }
 
     _putenv_s("UACSIM_FORCE_HOST_TESTS", "1");
-    CHECK(HostCasesAllowed(true, &why));  // 显式强制可越过检测
+    CHECK(HostCasesAllowed(true, &why) == admin); // 显式强制也越过不了提权要求
+    if (!admin) CHECK(why.find("administrator") != std::string::npos);
     CHECK_FALSE(HostCasesAllowed(false, &why)); // 但仍然必须先有 --allow-host
     _putenv_s("UACSIM_FORCE_HOST_TESTS", "");
 }
