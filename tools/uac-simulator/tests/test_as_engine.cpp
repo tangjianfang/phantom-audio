@@ -79,6 +79,27 @@ TEST_CASE("pacing: completion strictly at deadline, never early, exactly once") 
     CHECK(eng.stats().inBytes == 10 * 192);
 }
 
+// 全局流时间线：K 个在飞 URB 也不能按 K 倍速率出数。usbaudio.sys(UAC1) 实测同时压
+// ~6 个 iso IN URB；按"到达时刻+nPackets×间隔"排程时每个 URB 各自 1ms 后就完成，
+// 吞吐 = K 倍（真机 4 秒采到 6.09× 样本）。修复后 deadline 走全局 nextTx 时间线：
+// 无论在飞多少，每 1ms 只完成一个（1 包/URB 时）。
+TEST_CASE("pacing: K in-flight URBs complete at wall-clock rate, not K x") {
+    ManualClock clock;
+    LogStore log;
+    AsEngine eng(clock, log, StreamConfig{});
+    constexpr int kInFlight = 6;
+    for (uint32_t i = 1; i <= kInFlight; ++i)
+        eng.on_iso_in(make_iso_in(i, 1), capture_completion());
+    for (int ms = 1; ms <= kInFlight; ++ms) {
+        g_completed = 0;
+        clock.advance_to(static_cast<std::uint64_t>(ms) * 1000);
+        eng.pump();
+        CHECK_MESSAGE(g_completed == 1,
+                      "at t=" << ms << "ms exactly one URB must complete, got " << g_completed);
+    }
+    CHECK(eng.stats().inBytes == static_cast<std::uint64_t>(kInFlight) * 192);
+}
+
 TEST_CASE("deadline scales with packet count") {
     ManualClock clock;
     LogStore log;

@@ -149,8 +149,13 @@ void AsEngine::on_iso_in(const usbip::UrbCommand& cmd, CompletionFn complete) {
     pi.seqnum = cmd.basic.seqnum;
     pi.nPackets = static_cast<std::uint16_t>(
         std::min<std::uint64_t>(cmd.submit.number_of_packets, 0xffff));
-    pi.deadlineUs = clock_.now_us() +
-                    static_cast<std::uint64_t>(pi.nPackets) * cfg_.packetIntervalUs;
+    // 全局流时间线：URB 占据流槽位 [S, S+span)，在 S+span 完成，S = max(now, 流末端)。
+    // （按"到达+span"排程时，K 个在飞 URB = K 倍吞吐；usbaudio.sys 的 UAC1 管道实测 6.09×超采。
+    // 空闲后 S 从 now 重新起算，不做突发补偿。）
+    const std::uint64_t spanUs =
+        static_cast<std::uint64_t>(pi.nPackets) * cfg_.packetIntervalUs;
+    pi.deadlineUs = std::max(clock_.now_us(), nextTxUs_) + spanUs;
+    nextTxUs_ = pi.deadlineUs;
     pi.complete = std::move(complete);
     ++stats_.inRequests;
     pending_.push_back(std::move(pi));

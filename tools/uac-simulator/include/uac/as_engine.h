@@ -80,6 +80,10 @@ private:
     std::condition_variable cv_;
     StreamConfig cfg_;
     std::deque<PendingIn> pending_;
+    // 全局流时间线（µs）：已排队流槽位的末端。pacing 必须按流时间线而不是每个 URB 的
+    // 到达时刻——usbaudio.sys(UAC1) 会同时压 ~6 个在飞 URB，按到达排程会以 K 倍速率出数
+    // （真机实测 6.09×超采）。max(now, 流末端) 保证空闲后不突发补偿。
+    std::uint64_t nextTxUs_ = 0;
 
     // 源状态
     enum class Src { Silence, Sine, File } src_ = Src::Silence;
