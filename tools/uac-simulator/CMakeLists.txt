@@ -121,6 +121,12 @@ add_test(NAME uac_tests COMMAND uac_tests)
 # ---------------- 应用 ----------------
 add_executable(uacsimd apps/uacsimd/main.cpp)
 target_link_libraries(uacsimd PRIVATE uac_host uac_core ws2_32)
+# uacsimd 从 exe 旁的 profiles/ 解析文件型 profile（uac2-48k / uac2-hid-headset / uac1-razer-clio
+# 不在内置表里）：开发树不部署的话 GUI/CLI 只剩内置名可用（Sandbox zip 由 package-sandbox.ps1
+# 部署同一目录）。部署契约由 test_sim_host 的"GUI 名单全部可解析"用例看着。
+add_custom_command(TARGET uacsimd POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/profiles
+            $<TARGET_FILE_DIR:uacsimd>/profiles)
 
 add_executable(uacsim apps/uacsim/main.cpp)
 target_include_directories(uacsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

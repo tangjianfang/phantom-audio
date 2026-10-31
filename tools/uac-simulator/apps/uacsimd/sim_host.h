@@ -37,6 +37,8 @@ public:
     // the reply has gone out (stopping the API from inside its own request thread would deadlock).
     std::string on_shutdown();
     bool shutdown_requested() const { return shutdownRequested_.load(); }
+    // 诊断：把每个实例的每端点 URB 增量写进它的日志（空闲秒自动静默）。uacsimd 主循环每秒调一次。
+    void dump_urb_stats();
     std::string on_event(const std::string& type);
     std::string on_inject(const std::string& body); // Task 17 接入 FaultInjector
     std::string on_source(const std::string& body);
@@ -61,5 +63,8 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdownRequested_{false};
 };
+
+// profiles/<name>.json 缺席时仍可内置提供的名字（唯一真源：sim_host.cpp 的 builtinProfiles() 表）
+bool is_builtin_profile(const std::string& name);
 
 } // namespace uac
