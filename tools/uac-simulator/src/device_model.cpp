@@ -225,7 +225,12 @@ void DeviceModel::handle_ep0(const usbip::UrbCommand& cmd, std::span<const unsig
         cm.ret.status = -32; // -EPIPE（STALL 的 Linux errno）
     } else {
         ++cOk_;
-        cm.ret.actual_length = static_cast<std::uint32_t>(r.data.size());
+        // 控制写（OUT 带数据阶段，如 SET_CUR）：URB 完成须上报数据阶段实际字节数。
+        // 早期这里对 SET 恒报 0——usbaudio2 把它当"没写成"无限重发 SET_CUR(采样率)，
+        // 设备被选为默认/引擎介入时稳定复现 ~400 次/秒的控制风暴（2026-11-01 真机实测）。
+        const bool controlOut = (setup[0] & 0x80) == 0 && !payload.empty();
+        cm.ret.actual_length = controlOut ? static_cast<std::uint32_t>(payload.size())
+                                          : static_cast<std::uint32_t>(r.data.size());
         cm.payload = std::move(r.data);
     }
     if (delayMs > 0) { // 延迟注入：计时后异步完成
