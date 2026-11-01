@@ -174,6 +174,94 @@ SelfCheckResult RunGuiSelfCheck(HWND main, const std::vector<int>& expectedIds) 
     }
     rep << L"  measured " << measured << L" controls: " << (themeBad ? L"PROBLEMS above" : L"ok") << L"\n\n";
 
+    // ---- 1b. 边框环：带 CLIENTEDGE 的控件，其 2px 非客户区边框必须是深色 ----
+    // 起因：2026-11-01 用户截屏发现三个 EDIT 一圈白框——客户区统计永远测不到非客户区，
+    // 主题检查于是漏放。这里对主窗口做一次带子窗口的全量渲染，量每个带边控件的边框环带。
+    rep << L"[borders] non-client frame ring of EDIT/ComboBox must be dark\n";
+    {
+        const int bw = GetSystemMetrics(SM_CXEDGE) + 1, bh = GetSystemMetrics(SM_CYEDGE) + 1;
+        const int w = W(cr), ht = H(cr);
+        bool borderBad = false;
+        if (w > 0 && ht > 0) {
+            HDC screen = GetDC(nullptr);
+            HDC mem = CreateCompatibleDC(screen);
+            BITMAPINFO bi{};
+            bi.bmiHeader = {sizeof(BITMAPINFOHEADER), w, -ht, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+            void* bits = nullptr;
+            HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+            if (bmp && bits) {
+                auto* px = static_cast<UINT32*>(bits);
+                HGDIOBJ old = SelectObject(mem, bmp);
+                SendMessageW(main, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+                             PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN | PRF_NONCLIENT);
+                GdiFlush();
+                int checked = 0;
+                for (const auto& c : kids) {
+                    if (c.cls != L"Edit" && c.cls != L"ComboBox") continue;
+                    ++checked;
+                    long long ring = 0, light = 0;
+                    long long eT = 0, eB = 0, eL = 0, eR = 0; // 按边分布（诊断）
+                    // 组合框窗口高度含下拉列表区（本项目里 200 单位），可见的只是顶部"闭合框"
+                    //（itemHeight + 上下边框）。环带必须只绕闭合框——否则采样到相邻控件的文字。
+                    int visBottom = c.r.bottom;
+                    if (c.cls == L"ComboBox") {
+                        const LRESULT ih = SendMessageW(c.h, CB_GETITEMHEIGHT, 0, 0);
+                        if (ih > 0) visBottom = c.r.top + static_cast<int>(ih) + 2 * bh;
+                    }
+                    for (int y = c.r.top; y < visBottom; ++y) {
+                        const bool vband = y < c.r.top + bh || y >= visBottom - bh;
+                        // 组合框跳过顶带：它 200 单位高的窗体与副标题标签区域重叠，离屏渲染时
+                        // 兄弟控件（更低的 Z 序后画）会把文字印进这个带——屏幕实况并非如此。
+                        if (c.cls == L"ComboBox" && y < c.r.top + bh) continue;
+                        for (int x = c.r.left; x < c.r.right; ++x) {
+                            const bool hband = x < c.r.left + bw || x >= c.r.right - bw;
+                            if (!vband && !hband) continue; // 只取边框环带
+                            if (x < 0 || y < 0 || x >= w || y >= ht) continue;
+                            const UINT32 v = px[y * w + x] & 0x00FFFFFF;
+                            const int r = (v >> 16) & 0xFF, g = (v >> 8) & 0xFF, b = v & 0xFF;
+                            ++ring;
+                            if (r >= 140 && g >= 140 && b >= 140) {
+                                ++light;
+                                if (y < c.r.top + bh) ++eT;
+                                else if (y >= visBottom - bh) ++eB;
+                                else if (x < c.r.left + bw) ++eL;
+                                else ++eR;
+                            }
+                        }
+                    }
+                    if (ring > 0 && light * 100 > ring * 40) { // 环带超 40% 亮 = 白框
+                        borderBad = true;
+                        themeBad = true;
+                        { // 诊断：左上 8x8 像素颜色（定位白色到底是谁画的）
+                            rep << L"  DBG px@top-left:";
+                            for (int y = c.r.top; y < c.r.top + 8 && y < ht; ++y) {
+                                rep << L" [";
+                                for (int x = c.r.left; x < c.r.left + 8 && x < w; ++x) {
+                                    const UINT32 v = px[y * w + x] & 0x00FFFFFF;
+                                    wchar_t buf[16];
+                                    swprintf(buf, 16, L"%06X,", v);
+                                    rep << buf;
+                                }
+                                rep << L"]";
+                            }
+                            rep << L"\n";
+                        }
+                        rep << L"  PROBLEM [" << c.cls << L" id " << c.id << L"] frame ring light "
+                            << Pct(light, ring) << L" (T" << eT << L"/B" << eB << L"/L" << eL << L"/R"
+                            << eR << L") - white border on a dark theme\n";
+                    }
+                }
+                rep << L"  checked " << checked << L" framed controls: "
+                    << (borderBad ? L"PROBLEMS above" : L"ok") << L"\n";
+                SelectObject(mem, old);
+            }
+            if (bmp) DeleteObject(bmp);
+            DeleteDC(mem);
+            ReleaseDC(nullptr, screen);
+        }
+    }
+    rep << L"\n";
+
     // ---- 2. 控制层逻辑 ----
     rep << L"[logic] controller self-test\n";
     auto logic = [&](const std::wstring& what, bool ok) {

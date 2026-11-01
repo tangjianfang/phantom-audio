@@ -49,6 +49,8 @@
 #endif
 #include <windows.h>
 #include <commctrl.h>
+#include <uxtheme.h>
+#pragma comment(lib, "uxtheme.lib")
 #include <shellapi.h>
 #include <cstdio>
 #include <cstdlib>
@@ -85,7 +87,85 @@ constexpr uint16_t kDefaultPort = 3241;
 uint16_t g_port = kDefaultPort;
 
 HBRUSH g_brBg = nullptr, g_brPanel = nullptr;
+HBRUSH g_brBorder = nullptr; // 深色边框刷（EDIT 的 CLIENTEDGE 默认是亮色 3D 边，必须重画）
 HFONT g_fUi = nullptr, g_fTitle = nullptr, g_fMono = nullptr;
+
+// EDIT 的非客户区（WS_EX_CLIENTEDGE 的 2px 凹陷边框）默认画成亮色 3D，深色主题里就是一圈白框。
+// 子类化后在 WM_NCPAINT 里用深色画边框环（厚度按 SM_CXEDGE；不碰滚动条区域——它由主题负责）。
+LRESULT CALLBACK EditDarkBorderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp,
+                                    UINT_PTR /*id*/, DWORD_PTR /*ref*/) {
+    const LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    if (msg != WM_NCPAINT) return r;
+    if (!g_brBorder) return r;
+    HDC dc = GetWindowDC(h);
+    if (dc) {
+        RECT rc{};
+        GetWindowRect(h, &rc);
+        OffsetRect(&rc, -rc.left, -rc.top);
+        // 客户区（窗口坐标）之外的环带涂深；客户区裁掉，避免盖住内容与滚动条滑块
+        RECT cli = rc;
+        const int ex = GetSystemMetrics(SM_CXEDGE), ey = GetSystemMetrics(SM_CYEDGE);
+        cli.left += ex + 1; // EDIT 客户区内还有 1px 自绘内边距，环带宽一点也无妨（同色）
+        cli.top += ey + 1;
+        cli.right -= ex + 1;
+        cli.bottom -= ey + 1;
+        HRGN clip = CreateRectRgn(cli.left, cli.top, cli.right, cli.bottom);
+        int saved = SaveDC(dc);
+        ExtSelectClipRgn(dc, clip, RGN_DIFF);
+        FillRect(dc, &rc, g_brBorder);
+        RestoreDC(dc, saved);
+        DeleteObject(clip);
+        ReleaseDC(h, dc);
+    }
+    return r;
+}
+
+void DarkenEditFrame(HWND edit) { SetWindowSubclass(edit, EditDarkBorderProc, 1, 0); }
+
+// 组合框的边框由视觉样式画在客户区最外几像素（OWNERDRAW 只接管内容区），深色主题下是白框。
+// 子类化 WM_PAINT：系统先画，然后我们用深色环带覆盖客户区最外 3px。
+LRESULT CALLBACK ComboDarkFrameProc(HWND h, UINT msg, WPARAM wp, LPARAM lp,
+                                    UINT_PTR /*id*/, DWORD_PTR /*ref*/) {
+    const LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    if (msg == WM_NCPAINT && g_brBorder) { // 非客户环（WM_PRINT 的 PRF_NONCLIENT 也走这里）
+        HDC dc = GetWindowDC(h);
+        if (dc) {
+            RECT rc{};
+            GetWindowRect(h, &rc);
+            OffsetRect(&rc, -rc.left, -rc.top);
+            RECT inner = rc;
+            const int ex = GetSystemMetrics(SM_CXEDGE), ey = GetSystemMetrics(SM_CYEDGE);
+            inner.left += ex; inner.top += ey; inner.right -= ex; inner.bottom -= ey;
+            HRGN clip = CreateRectRgn(inner.left, inner.top, inner.right, inner.bottom);
+            const int saved = SaveDC(dc);
+            ExtSelectClipRgn(dc, clip, RGN_DIFF);
+            FillRect(dc, &rc, g_brBorder);
+            RestoreDC(dc, saved);
+            DeleteObject(clip);
+            ReleaseDC(h, dc);
+        }
+        return r;
+    }
+    if ((msg != WM_PAINT && msg != WM_PRINT && msg != WM_PRINTCLIENT) || !g_brBorder) return r;
+    const int band = GetSystemMetrics(SM_CXEDGE) + 1;
+    HDC dc = (msg == WM_PRINT || msg == WM_PRINTCLIENT) ? reinterpret_cast<HDC>(wp) : GetDC(h);
+    if (dc) {
+        RECT rc{};
+        GetClientRect(h, &rc);
+        RECT top = {rc.left, rc.top, rc.right, rc.top + band};
+        FillRect(dc, &top, g_brBorder);
+        RECT left = {rc.left, rc.top, rc.left + band, rc.bottom};
+        FillRect(dc, &left, g_brBorder);
+        RECT right = {rc.right - band, rc.top, rc.right, rc.bottom};
+        FillRect(dc, &right, g_brBorder);
+        RECT bottom = {rc.left, rc.bottom - band, rc.right, rc.bottom};
+        FillRect(dc, &bottom, g_brBorder);
+        if (msg == WM_PAINT) ReleaseDC(h, dc);
+    }
+    return r;
+}
+
+void DarkenComboFrame(HWND combo) { SetWindowSubclass(combo, ComboDarkFrameProc, 2, 0); }
 
 struct Ctl {
     HWND wnd = nullptr;
@@ -573,6 +653,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         const DWORD key = vis | BS_OWNERDRAW | WS_TABSTOP;
         g_brBg = CreateSolidBrush(C_BG);
         g_brPanel = CreateSolidBrush(C_PANEL);
+        g_brBorder = CreateSolidBrush(C_KEY_BORDER);
         g_fUi = CreateFontW(-Scale(h, 14), 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0,
                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         g_fTitle = CreateFontW(-Scale(h, 22), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, 0, 0, 0,
@@ -583,7 +664,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         // SS_ENDELLIPSIS: when the window is narrow and the label is shortened, end with "..." instead of cutting
         g_title.create(h, 901, L"STATIC", L"uacstudio", vis | SS_ENDELLIPSIS, 0, cs->hInstance, g_fTitle);
         g_sub.create(h, 902, L"STATIC", L"Connecting to uacsimd ...", vis | SS_ENDELLIPSIS, 0, cs->hInstance, g_fUi);
-        g_profileCombo.create(h, ID_PROFILE, L"COMBOBOX", nullptr, vis | CBS_DROPDOWNLIST | WS_VSCROLL,
+        // OWNERDRAW：组合框的边框/闭合态由系统主题画在客户区（白框），子类化 NC 救不了；
+        // 与按钮同款的自绘（WM_DRAWITEM）是唯一可控的深色做法，下拉列表仍走系统（已深色）。
+        g_profileCombo.create(h, ID_PROFILE, L"COMBOBOX", nullptr,
+                              vis | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | WS_VSCROLL,
                               0, cs->hInstance, g_fUi);
         for (const auto& p : uacstudio::ProfileNames())
             SendMessageW(g_profileCombo.wnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(p.c_str()));
@@ -603,10 +687,12 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                            cs->hInstance, g_fUi);
         g_hzEdit.create(h, ID_HZ, L"EDIT", L"1000", vis | ES_AUTOHSCROLL | WS_BORDER,
                         WS_EX_CLIENTEDGE, cs->hInstance, g_fMono);
+        DarkenEditFrame(g_hzEdit.wnd);
         g_btnSine.create(h, ID_SINE, L"BUTTON", L"Sine", key, 0, cs->hInstance, g_fUi);
         g_btnSilence.create(h, ID_SILENCE, L"BUTTON", L"Silence", key, 0, cs->hInstance, g_fUi);
         g_capEdit.create(h, ID_CAPEDIT, L"EDIT", L"capture.wav", vis | ES_AUTOHSCROLL | WS_BORDER,
                          WS_EX_CLIENTEDGE, cs->hInstance, g_fMono);
+        DarkenEditFrame(g_capEdit.wnd);
         g_btnCapStart.create(h, ID_CAPSTART, L"BUTTON", L"Record", key, 0, cs->hInstance, g_fUi);
         g_btnCapStop.create(h, ID_CAPSTOP, L"BUTTON", L"Stop rec", key, 0, cs->hInstance, g_fUi);
         g_lblLog.create(h, 905, L"STATIC", L"Request log (NDJSON, refreshed every 0.5 s)", vis, 0,
@@ -619,6 +705,12 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                          vis | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
                              ES_AUTOHSCROLL | ES_READONLY,
                          WS_EX_CLIENTEDGE, cs->hInstance, g_fMono);
+        DarkenEditFrame(g_logEdit.wnd);
+        // 滚动条深色：Win10 1809+ 对 EDIT 应用 DarkMode_Explorer 主题会把其滚动条渲染成深色
+        //（无官方 API，这是所有深色 Win32 应用的通行做法）；下拉列表同理。
+        SetWindowTheme(g_logEdit.wnd, L"DarkMode_Explorer", nullptr);
+        SetWindowTheme(g_profileCombo.wnd, L"DarkMode_Explorer", nullptr);
+        DarkenComboFrame(g_profileCombo.wnd);
         g_status.create(h, ID_STATUS, L"STATIC", L"", vis | SS_ENDELLIPSIS | SS_LEFTNOWORDWRAP, 0,
                         cs->hInstance, g_fUi);
         if (g_selfTest) SetTimer(h, kTimerSelfTest, 1200, nullptr); // wait for the first layout and paint
@@ -688,8 +780,45 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         SetTextColor(dc, ink);
         return reinterpret_cast<LRESULT>(g_brBg);
     }
+    case WM_MEASUREITEM: { // OWNERDRAWFIXED 的行高（组合框闭合态；下拉列表项用系统高度）
+        auto* mis = reinterpret_cast<LPMEASUREITEMSTRUCT>(lp);
+        if (mis->CtlID == ID_PROFILE) mis->itemHeight = Scale(h, 26);
+        return TRUE;
+    }
     case WM_DRAWITEM: {
         auto* dis = reinterpret_cast<LPDRAWITEMSTRUCT>(lp);
+        if (dis->CtlID == ID_PROFILE) { // 深色自绘组合框（闭合态）：底 C_KEY、边 C_KEY_BORDER、右上下拉箭头
+            HBRUSH bg = CreateSolidBrush(C_KEY);
+            FillRect(dis->hDC, &dis->rcItem, bg);
+            DeleteObject(bg);
+            FrameRect(dis->hDC, &dis->rcItem, g_brBorder);
+            wchar_t sel[64]{};
+            const LRESULT idx = SendMessageW(dis->hwndItem, CB_GETCURSEL, 0, 0);
+            if (idx >= 0)
+                SendMessageW(dis->hwndItem, CB_GETLBTEXT, static_cast<WPARAM>(idx),
+                             reinterpret_cast<LPARAM>(sel));
+            SetBkColor(dis->hDC, C_KEY);
+            SetTextColor(dis->hDC, C_INK);
+            auto oldF = static_cast<HFONT>(SelectObject(dis->hDC, g_fUi));
+            RECT tr = dis->rcItem;
+            tr.left += Scale(h, 10);
+            tr.right -= Scale(h, 26);
+            DrawTextW(dis->hDC, sel, -1, &tr, DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            SelectObject(dis->hDC, oldF);
+            // 下拉箭头（小三角）
+            const int ax = dis->rcItem.right - Scale(h, 15);
+            const int ay = (dis->rcItem.top + dis->rcItem.bottom) / 2;
+            const int s = Scale(h, 4);
+            HPEN pn = CreatePen(PS_SOLID, 1, C_MUTED);
+            auto oldP = static_cast<HPEN>(SelectObject(dis->hDC, pn));
+            MoveToEx(dis->hDC, ax - s, ay - s / 2, nullptr);
+            LineTo(dis->hDC, ax + s, ay - s / 2);
+            LineTo(dis->hDC, ax, ay + s / 2 + 1);
+            LineTo(dis->hDC, ax - s, ay - s / 2);
+            SelectObject(dis->hDC, oldP);
+            DeleteObject(pn);
+            return TRUE;
+        }
         if (dis->CtlID == 900) { // status LED: grey = offline, amber = listening, green = imported
             const COLORREF c = g_ledState == 2 ? C_OK : g_ledState == 1 ? C_ACCENT : C_KEY_BORDER;
             HBRUSH b = CreateSolidBrush(c);
