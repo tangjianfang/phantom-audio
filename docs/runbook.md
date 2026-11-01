@@ -65,6 +65,21 @@ Sandbox 流程不变，见 [sandbox.md](./sandbox.md)：
 其余 18 个用例（含扬声器 OUT 全链路、驱动绑定、GUI 按钮路径）真机通过。若未来 usbip-win2 修复
 （关注 issue #200 及其后续），直接重跑 `--autotest --allow-host` 即可回归。
 
+## 驱动栈恢复（开发机，2026-11-01 实战记录）
+
+两条会救命的结论：
+
+1. **UDE 根设备与 filter 的安装顺序不可颠倒**：filter（Extension INF，`usbip2_filter.inf`）必须在
+   `ROOT\USBIP_WIN2\UDE` 根设备存在之后安装；顺序颠倒（本机 13:31 曾发生：根设备缺失时
+   `pnputil /add-driver ... /install` filter）会留下一个**孤儿 `ROOT\EXTENSION\xxxx` 设备**，它同样
+   以 "USBip 3.X Emulated Host Controller" 名字注册 VHCI 接口，之后 `usbip attach` 一律报
+   *"Multiple instances of VHCI device interface found"*。处置：`pnputil /remove-device ROOT\EXTENSION\xxxx`
+   （保留 `ROOT\USB\xxxx` 那个真根设备）。
+2. **楔死的驱动栈只能重启救**：半途卸载/装卸（无中间重启）会留下内核态僵尸进程（taskkill 杀不动）
+   并让后续 `devnode install` 永久挂起。2026-11-01 两次实证。装卸的正确节奏：卸载 → **重启** → 安装。
+   根设备重装命令：`devnode.exe install C:\Windows\INF\<ude的oem编号>.inf ROOT\USBIP_WIN2\UDE`
+   （注意选 **usbip2_ude** 的 oem*.inf，别拿成 filter 的——两个 oem 编号相邻极易混）。
+
 ## 常见问题
 
 | 症状 | 处置 |
