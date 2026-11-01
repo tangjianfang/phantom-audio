@@ -3,6 +3,7 @@ rem build.bat - one-stop build entry for phantom-audio (repo root)
 rem
 rem Usage:
 rem   build.bat              build Release (default) -> build\release\*.exe
+rem                          (unit tests run on this build too; a failed build/test means NO zip)
 rem                          then package everything needed to run into
 rem                          tools\uac-simulator\dist\uacsim-sandbox-release.zip
 rem   build.bat debug        build Debug + run all tests (L1+L2); if they pass, package
@@ -55,7 +56,7 @@ popd & exit /b !RC!
 :do_debug
 echo === Debug build + tests ===
 cmake --preset win-x64-debug || (popd & exit /b 1)
-cmake --build --preset win-x64-debug || (popd & exit /b 1)
+call :build_step win-x64-debug || (popd & exit /b 1)
 ctest --preset win-x64-debug
 set "RC=!ERRORLEVEL!"
 echo.
@@ -68,14 +69,53 @@ if "!RC!"=="0" (
 popd & exit /b !RC!
 
 :do_release
-echo === Release build ===
+echo === Release build + tests ===
 cmake --preset win-x64-release || (popd & exit /b 1)
-cmake --build --preset win-x64-release || (popd & exit /b 1)
+call :build_step win-x64-release || (popd & exit /b 1)
 echo.
 echo output: %SIM%\build\release\  (uacsimd.exe / uacsim.exe / uacstudio.exe / host_probe.exe)
+rem The release artifacts are verified by the unit tests too - package only a green build.
+ctest --preset win-x64-release
+set "RC=!ERRORLEVEL!"
+if not "!RC!"=="0" (
+    echo [error] unit tests failed - the Sandbox zip was NOT rebuilt; fix the tests first
+    popd & exit /b !RC!
+)
 call :package release
 set "RC=!ERRORLEVEL!"
 popd & exit /b !RC!
+
+rem Build one preset; if the link failed because a previous uacstudio.exe/uacsimd.exe is still
+rem running (LNK1168: Windows refuses to overwrite a running exe), say so and offer to kill the
+rem old processes and retry once. The 30 s timeout defaults to N so unattended runs never hang.
+:build_step
+cmake --build --preset %~1
+rem NOTE: a failed ninja build surfaces as ERRORLEVEL -1 (e.g. LNK1104), and cmd's
+rem "if errorlevel 1" compares SIGNED, so -1 passes "not errorlevel 1" - compare exactly.
+set "BS_EL=!ERRORLEVEL!"
+if "!BS_EL!"=="0" exit /b 0
+set "LOCKED=0"
+rem tasklist exits non-zero when the filter matches nothing - no find needed (a Unix find
+rem from a Git-Bash PATH would shadow find.exe and break the old pipeline).
+tasklist /FI "IMAGENAME eq uacstudio.exe" >nul 2>&1 && set "LOCKED=1"
+tasklist /FI "IMAGENAME eq uacsimd.exe"   >nul 2>&1 && set "LOCKED=1"
+if "!LOCKED!"=="0" (
+    echo [error] build failed for preset %~1 - see the compiler/linker output above
+    exit /b 1
+)
+echo.
+echo [warn] the build failed and uacstudio.exe / uacsimd.exe is still running:
+echo        Windows cannot overwrite a running exe, so the linker could not update it.
+choice /C YN /T 30 /D N /M "End those processes and rebuild"
+if errorlevel 2 (
+    echo [error] close the running uacstudio.exe / uacsimd.exe yourself and run build.bat again
+    exit /b 1
+)
+taskkill /F /IM uacstudio.exe >nul 2>&1
+taskkill /F /IM uacsimd.exe   >nul 2>&1
+echo [info] old processes ended - rebuilding
+cmake --build --preset %~1
+exit /b !ERRORLEVEL!
 
 :do_coverage
 echo === coverage (requires OpenCppCoverage: winget install OpenCppCoverage.OpenCppCoverage) ===
