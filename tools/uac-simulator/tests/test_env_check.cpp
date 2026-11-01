@@ -87,7 +87,7 @@ TEST_CASE("env check: every step is announced, the text is English, and a closed
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
     INFO("took " << ms << " ms");
 
-    CHECK(items.size() == 6);
+    CHECK(items.size() == 7); // 3b) VHCI 根设备探测（服务在 != 主控在，2026-11-01 真机教训）
     CHECK(said.size() >= items.size()); // at least one "what I am doing" line per item
     for (const auto& s : said) {
         CHECK_MESSAGE(!s.empty(), "an empty progress line tells the user nothing");
@@ -124,7 +124,7 @@ TEST_CASE("env check: the uacsimd row follows reality - closed port is missing, 
 
 TEST_CASE("env check: a progress callback is optional") {
     const auto items = RunEnvChecks(unused_port());
-    CHECK(items.size() == 6);
+    CHECK(items.size() == 7); // 3b) VHCI 根设备探测（服务在 != 主控在，2026-11-01 真机教训）
 }
 
 TEST_CASE("english-only rule: the scanner flags non-ASCII string literals and ignores comments") {

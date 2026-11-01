@@ -75,3 +75,10 @@ CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso
 CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
 CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
 CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+RET hex: hdr=000000000000078000e543a60000000a000000000000000000000000 payload[0..31]=0000000000000000000000000000000000000000000000000000000000000000 iso[0]=00000000000000c0000000c000000000
+RET hex: hdr=000000000000078000e543a60000000a000000000000000000000000 payload[0..31]=0000000000000000000000000000000000000000000000000000000000000000 iso[0]=00000000000000c0000000c000000000

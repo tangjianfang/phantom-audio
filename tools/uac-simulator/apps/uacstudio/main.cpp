@@ -472,6 +472,32 @@ void RequestMain(HWND h) {
             g_activeWhat.clear();
         }
         PushLine(h, "[" + r.what + "] " + (ok ? out : "request failed - is uacsimd running?"));
+        // "Attached" 只代表 profile 装进了模拟器；设备进没进 Windows 是另一件事。别让成功字样
+        // 掩盖这一步——直接告诉用户当前 Windows 侧的状态和下一步（都在本后台线程，不碰 UI 线程）。
+        if (ok && r.path == "/attach") {
+            const auto ds = uacstudio::DetectDriver();
+            if (ds.usbipPresent) {
+                const auto pr = uacstudio::RunTool(ds.usbipPath, "port", 15000);
+                const bool vhciGone = pr.out.find("not found") != std::string::npos;
+                const auto ours = uacstudio::ParseOurUsbipPorts(pr.out, 3240);
+                if (vhciGone) {
+                    PushLine(h,
+                             "NOTE: attached in the SIMULATOR only. The usbip virtual host controller "
+                             "is missing (driver stack needs a restart + --install-driver), so the "
+                             "device cannot reach Windows - see the Environment window.");
+                } else if (ours.empty()) {
+                    PushLine(h,
+                             "NOTE: attached in the SIMULATOR only - the device is not in Windows "
+                             "yet. Use 'Attach to Windows' in the Environment window to import it.");
+                } else {
+                    PushLine(h, "Device is in Windows (usbip port " + *ours.begin() + ").");
+                }
+            } else {
+                PushLine(h,
+                         "NOTE: attached in the SIMULATOR only - usbip.exe/driver not found, so "
+                         "the device cannot be imported into Windows on this machine.");
+            }
+        }
         PostMessageW(h, WM_APP_ACTIVITY, 0, 0);
         PokePoller(); // the device state probably changed: refresh the LED now instead of in half a second
     }

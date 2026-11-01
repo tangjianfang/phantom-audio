@@ -185,6 +185,40 @@ std::vector<EnvItem> RunEnvChecks(std::uint16_t port, const EnvProgress& progres
         items.push_back(std::move(it));
     }
 
+    // 3b) VHCI 虚拟主控设备节点（usbip attach 的挂载点）。服务在 ≠ 主控在：热装卸/半途卸载会把
+    // ROOT\USBIP_WIN2\UDE 节点摘掉，此后 attach 全部失败而服务仍显示 Running——2026-11-01 真机
+    // 踩过：GUI 只报"Attached"而设备永远不出现。这里主动探测并给出修复步骤。
+    {
+        say(L"probing the usbip virtual host controller (usbip port) ...");
+        EnvItem it;
+        it.name = L"usbip virtual host controller (VHCI root device)";
+        const auto ds = DetectDriver();
+        if (!ds.usbipPresent) {
+            it.state = 1; // usbip.exe 没有（驱动未装）时不算这一项的问题
+            it.detail = L"Skipped: usbip.exe not found (driver not installed)";
+        } else {
+            const auto r = RunTool(ds.usbipPath, "port", 15000);
+            if (r.started && !r.timedOut && r.out.find("not found") == std::string::npos) {
+                it.state = 2;
+                it.detail = L"Present (usbip port answered)";
+            } else {
+                it.state = 0;
+                it.detail = r.started && !r.timedOut
+                                ? Widen(r.out.substr(0, 120))
+                                : L"usbip port did not answer";
+                it.fixNote =
+                    L"The virtual host controller is gone although the service still runs - this "
+                    L"happens when the driver is installed/uninstalled without a reboot in between.\n"
+                    L"  1. Restart Windows\n"
+                    L"  2. Run: uacstudio --install-driver   (recreates the root device node)\n"
+                    L"Until then every Attach to Windows fails and no audio endpoint will appear, "
+                    L"even though the Attach button in the main window reports success.";
+                it.fixCmd = L"uacstudio --install-driver";
+            }
+        }
+        items.push_back(std::move(it));
+    }
+
     // 4) usbip.exe (command-line attach tool, installed with the driver)
     {
         say(L"looking for usbip.exe ...");
