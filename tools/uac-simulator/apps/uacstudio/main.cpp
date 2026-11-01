@@ -386,8 +386,15 @@ void AppendLog(const std::string& utf8) {
 }
 
 std::string CurrentProfile() {
+    // OWNERDRAW 的 CBS_DROPDOWNLIST 上 GetWindowText 返回空（2026-11-01 真机回归：
+    // GUI 发出空 profile 名被白名单拒绝，"invalid profile name"）。从列表项取选中值。
     wchar_t buf[128]{};
-    GetWindowTextW(g_profileCombo.wnd, buf, 128);
+    const LRESULT sel = SendMessageW(g_profileCombo.wnd, CB_GETCURSEL, 0, 0);
+    if (sel >= 0 &&
+        SendMessageW(g_profileCombo.wnd, CB_GETLBTEXT, static_cast<WPARAM>(sel),
+                     reinterpret_cast<LPARAM>(buf)) > 0)
+        return Narrow(buf);
+    GetWindowTextW(g_profileCombo.wnd, buf, 128); // 兜底（非 owner-draw 场景）
     return Narrow(buf);
 }
 
@@ -554,7 +561,7 @@ void RequestMain(HWND h) {
         PushLine(h, "[" + r.what + "] " + (ok ? out : "request failed - is uacsimd running?"));
         // "Attached" 只代表 profile 装进了模拟器；设备进没进 Windows 是另一件事。别让成功字样
         // 掩盖这一步——直接告诉用户当前 Windows 侧的状态和下一步（都在本后台线程，不碰 UI 线程）。
-        if (ok && r.path == "/attach") {
+        if (ok && r.path == "/attach" && out.find("\"attached\"") != std::string::npos) {
             const auto ds = uacstudio::DetectDriver();
             if (ds.usbipPresent) {
                 const auto pr = uacstudio::RunTool(ds.usbipPath, "port", 15000);
@@ -666,8 +673,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         g_sub.create(h, 902, L"STATIC", L"Connecting to uacsimd ...", vis | SS_ENDELLIPSIS, 0, cs->hInstance, g_fUi);
         // OWNERDRAW：组合框的边框/闭合态由系统主题画在客户区（白框），子类化 NC 救不了；
         // 与按钮同款的自绘（WM_DRAWITEM）是唯一可控的深色做法，下拉列表仍走系统（已深色）。
+        // CBS_HASSTRINGS 必须带：owner-draw 默认不存字符串（item 变 32 位数据），CB_GETLBTEXT
+        // 返回指针乱码，Attach 就发出 {"profile":"圞ɂ"} 被白名单拒绝（2026-11-01 真机踩过）。
         g_profileCombo.create(h, ID_PROFILE, L"COMBOBOX", nullptr,
-                              vis | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | WS_VSCROLL,
+                              vis | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL,
                               0, cs->hInstance, g_fUi);
         for (const auto& p : uacstudio::ProfileNames())
             SendMessageW(g_profileCombo.wnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(p.c_str()));
