@@ -23,7 +23,7 @@
 |---|---|
 | `rfc-windows-virtual-uac-device.md` | 方案 RFC（v2，含网络核实依据） |
 | `tools/uac-simulator/` | 全部源码（C++20）、Profile、脚本、测试 |
-| `docs/` | 设计文档 / 实施计划 / 运行手册 / 验收报告 |
+| `docs/` | [架构](./docs/architecture.md) / [详细设计](./docs/detailed-design.md) / [使用说明](./docs/userguide.md) / 运行手册 / 验收报告 / 历史方案 |
 | `LICENSE` | **PolyForm Noncommercial 1.0.0**（个人与非商业免费；商业需授权） |
 
 ## 快速开始
