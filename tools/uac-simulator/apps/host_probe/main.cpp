@@ -221,10 +221,16 @@ int cmd_capture(double freq, int seconds, const std::string& id, bool loopback, 
     if (!d) { printf("{\"error\":\"no endpoint\"}\n"); return 2; }
     IAudioClient* ac = nullptr;
     if (FAILED(d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                           reinterpret_cast<void**>(&ac)))) return 2;
+                           reinterpret_cast<void**>(&ac)))) {
+        printf("{\"error\":\"activate\"}\n");
+        return 2;
+    }
     WAVEFORMATEX* fmt = nullptr;
     REFERENCE_TIME dur = 10000000; // 1s 缓冲
-    if (FAILED(ac->GetMixFormat(&fmt))) return 2;
+    if (FAILED(ac->GetMixFormat(&fmt))) {
+        printf("{\"error\":\"mixformat\"}\n");
+        return 2;
+    }
     const bool sharedLoopback = loopback;
     if (FAILED(ac->Initialize(AUDCLNT_SHAREMODE_SHARED, sharedLoopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0,
                               dur, 0, fmt, nullptr))) {
