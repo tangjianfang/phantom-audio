@@ -1,0 +1,77 @@
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3520 startFrame=0 interval=4 flags=2 iso0={off=0,len=352}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=00000000000002c00016710e0000000a000000000000000000000000 payload[0..31]=00000000566f160977b9fd11c6ad871ad7ff8722482dd5291455493017fcc235 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=00000000000001600016710e0000000a000000000000000000000000 payload[0..31]=8dc65afcb1e3760599a7760ead622b1797ea671f9884012730c3d02dad52b233 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=1920 startFrame=-1 interval=1 flags=0 iso0={off=0,len=192}
+RET hex: hdr=0000000000000780006952280000000a000000000000000000000000 payload[0..31]=0000000000000000000000000000000000000000000000000000000000000000 iso[0]=00000000000000c0000000c000000000
+RET hex: hdr=0000000000000780006952280000000a000000000000000000000000 payload[0..31]=0000000000000000000000000000000000000000000000000000000000000000 iso[0]=00000000000000c0000000c000000000
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3520 startFrame=0 interval=4 flags=2 iso0={off=0,len=352}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=00000000000002c0006f87250000000a000000000000000000000000 payload[0..31]=00000000566f160977b9fd11c6ad871ad7ff8722482dd5291455493017fcc235 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=0000000000000160006f87250000000a000000000000000000000000 payload[0..31]=8dc65afcb1e3760599a7760ead622b1797ea671f9884012730c3d02dad52b233 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3520 startFrame=0 interval=4 flags=2 iso0={off=0,len=352}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=4 dir=IN nPackets=16 bufLen=64 startFrame=0 interval=4 flags=2 iso0={off=0,len=4}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=OUT nPackets=10 bufLen=3528 startFrame=0 interval=4 flags=2 iso0={off=0,len=360}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=00000000000002c00070c8cd0000000a000000000000000000000000 payload[0..31]=00000000566f160977b9fd11c6ad871ad7ff8722482dd5291455493017fcc235 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+RET hex: hdr=0000000000000dc80070c8dd0000000a000000000000000000000000 payload[0..31]=8dc65afcb1e3760599a7760ead622b1797ea671f9884012730c3d02dad52b233 iso[0]=00000000000001600000016000000000
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}
+CMD iso: ep=6 dir=IN nPackets=10 bufLen=3840 startFrame=0 interval=4 flags=2 iso0={off=0,len=384}

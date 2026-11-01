@@ -263,6 +263,9 @@ struct ControlApi::Impl {
             if (method == "POST" && path == "/capture")
                 return cb.capture ? http_response(200, cb.capture(body))
                                   : http_response(501, "{\"error\":\"no capture\"}");
+            if (method == "POST" && path == "/monitor")
+                return cb.monitor ? http_response(200, cb.monitor(body))
+                                  : http_response(501, "{\"error\":\"no monitor\"}");
             return http_response(404, "{\"error\":\"not found\"}");
         } catch (const json::exception& e) {
             return http_response(400, std::string("{\"error\":\"bad json: ") + e.what() + "\"}");

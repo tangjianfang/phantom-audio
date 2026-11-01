@@ -55,9 +55,9 @@ target_link_libraries(uac_core PUBLIC ws2_32)
 # ---------------- 服务编排层（uacsimd 与单测共用） ----------------
 # SimHost 是 HTTP→设备模型的编排层，含 attach/路径校验等安全相关逻辑；
 # 之前只编进 uacsimd.exe，单测碰不到，所以那里的 bug 没被抓住。
-add_library(uac_host STATIC apps/uacsimd/sim_host.cpp)
+add_library(uac_host STATIC apps/uacsimd/sim_host.cpp apps/uacsimd/speaker_monitor.cpp)
 target_include_directories(uac_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/apps/uacsimd)
-target_link_libraries(uac_host PUBLIC uac_core)
+target_link_libraries(uac_host PUBLIC uac_core winmm)
 
 # ---------------- uacstudio 的非窗口逻辑（GUI 与单测共用） ----------------
 # 控制层（按钮表/请求体构建）与一键自动测试的用例表、运行器。主窗口不在这里，

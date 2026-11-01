@@ -75,6 +75,8 @@ public:
     usbip::UsbIpDevice usbip_device() const; // 导出给 server 的设备清单
     std::uint8_t interface_alt(std::uint8_t iface) const;
     AcState ac_state() const;
+    // iProduct 字符串（UTF-16LE 描述符解码为窄串；无则空）。扬声器监听用它排除虚拟设备自己。
+    std::string product() const;
     // 诊断：每端点 URB 计数（自上次调用以来的增量），用于定位主机侧轮询/重试循环。
     // ep0=控制提交 / ok / stall；int81=AC 状态字中断 IN；hid82=HID 中断 IN；fb84=反馈 IN；
     // iso86=麦克风 iso IN；iso06=扬声器 iso OUT；unk=未知端点(STALL)；unl=UNLINK。

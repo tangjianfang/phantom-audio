@@ -4,6 +4,7 @@
 #include <uac/device_model.h>
 #include <uac/profile.h>
 #include <uac/usbip_server.h>
+#include "speaker_monitor.h"
 #include <filesystem>
 #include <mutex>
 #include <utility>
@@ -39,10 +40,17 @@ public:
     bool shutdown_requested() const { return shutdownRequested_.load(); }
     // 诊断：把每个实例的每端点 URB 增量写进它的日志（空闲秒自动静默）。uacsimd 主循环每秒调一次。
     void dump_urb_stats();
+
+    // ---- 测试钩子（单测用，不碰 winmm） ----
+    using MonitorHook = std::function<void(const std::int16_t*, std::size_t, std::uint32_t, std::uint8_t)>;
+    void set_monitor_hook(MonitorHook h);
+    void feed_speaker_for_test(std::uint32_t rate, std::uint8_t channels); // 模拟一包扬声器等时数据
     std::string on_event(const std::string& type);
     std::string on_inject(const std::string& body); // Task 17 接入 FaultInjector
     std::string on_source(const std::string& body);
     std::string on_capture(const std::string& body);
+    // POST /monitor {"on":bool}：虚拟扬声器收到的音频是否从真实输出设备放出（默认开）
+    std::string on_monitor(const std::string& body);
 
     DeviceModel* model() { return model_; }
     DeviceModel* model_at(std::size_t i) {
@@ -60,6 +68,10 @@ private:
     std::string current_profile_;
     std::uint16_t usbipPort_ = 3240; // honored by every (re)listen
     std::string logFile_;            // per-model NDJSON sink
+    SpeakerMonitor monitor_;         // 虚拟扬声器 → 真实输出设备（像真实声卡出声）
+    bool monitorOn_ = true;          // guarded by mtx_
+    MonitorHook monitorHook_;        // 测试注入（设置后不走 winmm）；guarded by mtx_
+    void apply_monitor();            // 按 monitorOn_ 与当前 model 重接引擎监听回调
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdownRequested_{false};
 };

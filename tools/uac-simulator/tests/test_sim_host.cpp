@@ -257,3 +257,37 @@ TEST_CASE("sim host: every GUI profile name resolves from the exe-side profiles 
                                        << " and not built-in");
     }
 }
+
+// 扬声器监听（像真实声卡出声）：attach 后引擎的等时 OUT 数据要喂给监听回调；
+// /monitor 可关开；status 上报；坏请求体要拒绝。
+TEST_CASE("sim host: speaker monitor feeds decoded PCM, toggles over /monitor, reports in status") {
+    std::vector<std::int16_t> fed;
+    uint32_t fedRate = 0;
+    uint8_t fedCh = 0;
+    {
+        Host host;
+        host.attach("uac2-48k");
+        host.h.set_monitor_hook([&](const std::int16_t* p, std::size_t n, uint32_t r, uint8_t ch) {
+            fed.assign(p, p + n);
+            fedRate = r;
+            fedCh = ch;
+        });
+        host.h.feed_speaker_for_test(48000, 2); // 直接喂一包 48k 立体声
+        REQUIRE(fed.size() == 48 * 2);
+        REQUIRE(fedRate == 48000);
+        REQUIRE(fedCh == 2);
+
+        const auto st = json::parse(host.h.on_status());
+        CHECK(st.value("monitor", false));     // 默认开
+        CHECK(st.contains("monitorActive"));   // 真实设备有无（CI 无声卡时 false，不算失败）
+
+        const auto off = json::parse(host.h.on_monitor("{\"on\":false}"));
+        CHECK(off.value("monitor", false) == false);
+        CHECK(json::parse(host.h.on_status()).value("monitor", true) == false);
+
+        const auto bad = json::parse(host.h.on_monitor("{\"on\":\"yes\"}"));
+        CHECK(bad.contains("error"));          // 非布尔必须拒绝
+        const auto on = json::parse(host.h.on_monitor("{\"on\":true}"));
+        CHECK(on.value("monitor", false));
+    }
+}

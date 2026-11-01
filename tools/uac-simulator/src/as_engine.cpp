@@ -186,12 +186,13 @@ void AsEngine::on_iso_out(std::span<const unsigned char> payload,
                           std::span<const usbip::IsoPacket> iso) {
     std::lock_guard lk(mtx_);
     ++stats_.outRequests;
-    if (!capture_.is_open()) return;
     const std::size_t slot = std::max<std::size_t>(cfg_.bytesPerSample, 1);
     auto write_packet = [&](const unsigned char* data, std::size_t bytes) {
         // The sink is 16-bit PCM: for wider slots keep the low 16 bits of
         // each slot (little-endian), preserving sample count and channels.
         std::vector<std::int16_t> cvt;
+        const std::int16_t* pcm = nullptr;
+        std::size_t pcmCount = 0;
         if (slot > 2) {
             cvt.reserve(bytes / slot);
             for (std::size_t off = 0; off + slot <= bytes; off += slot) {
@@ -200,10 +201,16 @@ void AsEngine::on_iso_out(std::span<const unsigned char> payload,
                 cvt.push_back(static_cast<std::int16_t>(data[off + slot - 2] |
                                                         (data[off + slot - 1] << 8)));
             }
-            capture_.write(cvt.data(), cvt.size());
+            pcm = cvt.data();
+            pcmCount = cvt.size();
         } else {
-            capture_.write(reinterpret_cast<const std::int16_t*>(data), bytes / 2);
+            pcm = reinterpret_cast<const std::int16_t*>(data);
+            pcmCount = bytes / 2;
         }
+        if (capture_.is_open()) capture_.write(pcm, pcmCount);
+        // 扬声器监听（像真实声卡出声）：同一份 16 位 PCM 交给监听回调（SimHost 接到
+        // winmm 播到真实输出设备）。回调在引擎线程上，必须快、不得阻塞。
+        if (monitor_) monitor_(pcm, pcmCount, cfg_.rate, cfg_.channels);
     };
     if (!iso.empty()) {
         for (auto&& p : iso) {

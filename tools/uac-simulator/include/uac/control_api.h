@@ -28,9 +28,10 @@ struct ControlCallbacks {
     std::function<std::string(const std::string&)> event;
     // POST /inject {...} → 结果文本
     std::function<std::string(const std::string& body)> inject;
-    // POST /source {...} / POST /capture {...}
+    // POST /source {...} / POST /capture {...} / POST /monitor {...}
     std::function<std::string(const std::string& body)> source;
     std::function<std::string(const std::string& body)> capture;
+    std::function<std::string(const std::string& body)> monitor;
 };
 
 class ControlApi {

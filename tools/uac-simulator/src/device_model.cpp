@@ -499,4 +499,16 @@ std::uint8_t DeviceModel::interface_alt(std::uint8_t iface) const {
 
 AcState DeviceModel::ac_state() const { return snap_.ac; }
 
+std::string DeviceModel::product() const {
+    std::lock_guard lk(mtx_);
+    const auto it = snap_.strings.find(2); // iProduct = 2（构造端约定：1=厂商 2=产品 3=序列）
+    if (it == snap_.strings.end() || it->second.size() < 4) return {};
+    std::string s;
+    for (std::size_t i = 2; i + 1 < it->second.size(); i += 2) {
+        const auto ch = static_cast<wchar_t>(it->second[i] | (it->second[i + 1] << 8));
+        s.push_back(ch >= 0x20 && ch < 0x7f ? static_cast<char>(ch) : '?');
+    }
+    return s;
+}
+
 } // namespace uac

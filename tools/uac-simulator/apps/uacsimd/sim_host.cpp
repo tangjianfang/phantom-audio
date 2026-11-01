@@ -62,6 +62,7 @@ bool SimHost::start(std::uint16_t usbipPort, std::uint16_t httpPort) {    usbipP
     cb.inject = [this](const std::string& b) { return on_inject(b); };
     cb.source = [this](const std::string& b) { return on_source(b); };
     cb.capture = [this](const std::string& b) { return on_capture(b); };
+    cb.monitor = [this](const std::string& b) { return on_monitor(b); };
 
     if (!api_.start(httpPort, std::move(cb))) return false;
     running_.store(true);
@@ -83,6 +84,8 @@ std::string SimHost::on_status() {
     j["instances"] = models_.size();
     j["listening"] = model_ != nullptr;      // usbip 端口在监听（可 attach）
     j["imported"] = server_.attached();       // vhci 已 IMPORT（真占用中）
+    j["monitor"] = monitorOn_;                // 扬声器监听开关（真实设备出声）
+    j["monitorActive"] = monitorOn_ && monitor_.ready();
     if (model_) {
         auto ac = model_->ac_state();
         j["volCurDb"] = ac.volCur[0] / 256.0;
@@ -168,6 +171,7 @@ std::string SimHost::on_attach(const std::string& profileName, bool confineName)
         if (!logFile_.empty()) model->log().set_file_sink(logFile_); // per-model NDJSON sink
         models_.emplace_back(profileName, std::move(model));
         model_ = models_.back().second.get();
+        apply_monitor(); // 扬声器监听：像真实声卡，收到的声音从真实输出设备放出
         const auto instanceCount = models_.size();
         // 重建导出清单：每实例独立 busid/devnum，且与各自 dispatcher 配对，
         // 使 URB 按导入的 busid 路由到正确的设备模型（此前全部走 models_[0]）
@@ -308,6 +312,61 @@ std::string SimHost::on_capture(const std::string& body) {
         }
         model_->engine().set_capture_sink(path);
         return json{{"ok", true}, {"path", path}}.dump();
+    } catch (const std::exception& e) {
+        return json{{"error", e.what()}}.dump();
+    }
+}
+
+// 按 monitorOn_ 与当前 model 重接/断开引擎的监听回调；测试钩子优先于 winmm；选不到真实输出设备时回调不下发。
+void SimHost::apply_monitor() {
+    if (!model_) {
+        monitor_.stop();
+        return;
+    }
+    if (monitorHook_) {
+        model_->engine().set_monitor(monitorOn_ ? monitorHook_ : nullptr);
+        return;
+    }
+    const bool ok = monitor_.start(model_->product());
+    if (monitorOn_ && ok) {
+        auto* m = &monitor_;
+        model_->engine().set_monitor(
+            [m](const std::int16_t* p, std::size_t n, std::uint32_t r, std::uint8_t ch) {
+                m->feed(p, n, r, ch);
+            });
+    } else {
+        model_->engine().set_monitor(nullptr);
+    }
+}
+
+void SimHost::set_monitor_hook(MonitorHook h) {
+    std::lock_guard lk(mtx_);
+    monitorHook_ = std::move(h);
+    apply_monitor();
+}
+
+void SimHost::feed_speaker_for_test(std::uint32_t rate, std::uint8_t channels) {
+    std::lock_guard lk(mtx_);
+    if (!model_ || !rate || !channels) return;
+    usbip::UrbCommand c{};
+    c.is_submit = true;
+    c.basic.command = usbip::CMD_SUBMIT;
+    c.basic.direction = usbip::DIR_OUT;
+    c.basic.ep = 6; // 扬声器等时 OUT
+    c.submit.transfer_buffer_length = rate / 1000 * channels * 4; // 4 字节槽（uac2）
+    std::vector<unsigned char> payload(c.submit.transfer_buffer_length, 0x40);
+    model_->on_urb(c, payload, {}, [](Completion&&) {});
+}
+
+std::string SimHost::on_monitor(const std::string& body) {
+    std::lock_guard lk(mtx_);
+    try {
+        const auto j = json::parse(body.empty() ? "{}" : body);
+        if (!j.contains("on") || !j["on"].is_boolean())
+            return json{{"error", "body must be {\"on\": true|false}"}}.dump();
+        monitorOn_ = j["on"].get<bool>();
+        apply_monitor();
+        return json{{"ok", true}, {"monitor", monitorOn_}, {"status", monitor_.status()}}.dump();
     } catch (const std::exception& e) {
         return json{{"error", e.what()}}.dump();
     }

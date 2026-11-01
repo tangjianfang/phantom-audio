@@ -9,6 +9,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -43,6 +44,12 @@ public:
     void set_source_silence();
 
     void set_capture_sink(const std::string& wavPath);
+    // 扬声器监听：等时 OUT 解码后的 16 位 PCM（交错声道）按包回调。回调在引擎线程，
+    // 必须快。传空关闭。像真实声卡：虚拟输出设备收到的声音从真实喇叭放出来。
+    void set_monitor(std::function<void(const std::int16_t*, std::size_t, std::uint32_t, std::uint8_t)> m) {
+        std::lock_guard lk(mtx_);
+        monitor_ = std::move(m);
+    }
 
     struct Stats {
         std::uint64_t inRequests = 0, outRequests = 0;
@@ -96,6 +103,7 @@ private:
     std::uint64_t filePos_ = 0;
 
     WavWriter capture_;
+    std::function<void(const std::int16_t*, std::size_t, std::uint32_t, std::uint8_t)> monitor_;
     Stats stats_;
     std::atomic<bool> autoPump_{false};
     std::thread pumpThread_;
