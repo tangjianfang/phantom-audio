@@ -1093,6 +1093,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nCmdShow) {
     // Which uacsimd port the GUI talks to. The smoke script points it at a port nobody listens on to check that the
     // window stays responsive without uacsimd.
     if (const auto port = ArgValue(L"--port"); !port.empty()) g_port = static_cast<uint16_t>(_wtoi(port.c_str()));
+    // --allow-host：在本进程内打开 host 用例开关（供"Restart as administrator"重启后的新实例使用；
+    // 等效于外部设 UACSIM_FORCE_HOST_TESTS=1，见 auto_test.cpp 的 HostCasesAllowed）。
+    if (HasArg(L"--allow-host")) SetEnvironmentVariableW(L"UACSIM_FORCE_HOST_TESTS", L"1");
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
     WNDCLASSW wc{};

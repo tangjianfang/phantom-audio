@@ -361,6 +361,7 @@ struct CheckWnd {
     HWND wnd = nullptr;
     std::vector<CheckRow> rows;
     HWND hint = nullptr, recheck = nullptr, done = nullptr;
+    HWND restart = nullptr; // "Restart as administrator": shown only while the host-actions guard declines
     HWND actionBtn[kActionCount]{};
     HBRUSH brBg = nullptr, brPanel = nullptr;
     HFONT fUi = nullptr, fMono = nullptr, fTitle = nullptr;
@@ -427,8 +428,10 @@ void LayoutAll(CheckWnd* ck) {
         y += S(ck->wnd, 30) + S(ck->wnd, 6);
     }
     y += S(ck->wnd, 2);
-    // Status text (up to three lines) with Recheck / Done to its right
+    // Status text (up to three lines) with Restart / Recheck / Done to its right
     MoveWindow(ck->hint, m, y, W - 2 * m - S(ck->wnd, 200), S(ck->wnd, 54), TRUE);
+    MoveWindow(ck->restart, W - m - 3 * S(ck->wnd, 100), y + S(ck->wnd, 4), S(ck->wnd, 92),
+               S(ck->wnd, 28), TRUE);
     MoveWindow(ck->recheck, W - m - 2 * S(ck->wnd, 100), y + S(ck->wnd, 4), S(ck->wnd, 92), S(ck->wnd, 28), TRUE);
     MoveWindow(ck->done, W - m - S(ck->wnd, 100), y + S(ck->wnd, 4), S(ck->wnd, 92), S(ck->wnd, 28), TRUE);
     InvalidateRect(ck->wnd, nullptr, TRUE);
@@ -445,6 +448,9 @@ void RefreshButtons(CheckWnd* ck) {
         EnableWindow(ck->actionBtn[i], (on && !Busy(ck)) ? TRUE : FALSE);
     }
     EnableWindow(ck->recheck, Busy(ck) ? FALSE : TRUE);
+    // 守卫放行时不需要"重启为管理员"；拒绝时它是唯一的出路，保持可点（忙时除外）
+    ShowWindow(ck->restart, ck->host.allowed ? SW_HIDE : SW_SHOW);
+    EnableWindow(ck->restart, (!ck->host.allowed && !Busy(ck)) ? TRUE : FALSE);
 }
 
 // Build the rows from finished check results (UI thread; no blocking work here)
@@ -752,6 +758,40 @@ LRESULT CALLBACK CheckProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             RequestClose(ck, h);
             return 0;
         }
+        if (id == 3) { // Restart as administrator: relaunch self elevated with host cases enabled
+            if (MessageBoxW(h,
+                            L"Restart uacstudio as administrator with host actions enabled?\n\n"
+                            L"The new instance runs elevated and sets UACSIM_FORCE_HOST_TESTS for itself, "
+                            L"which unlocks 'Attach to Windows' and the other host actions. "
+                            L"A UAC prompt will appear.",
+                            L"Restart as administrator", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
+                return 0;
+            StartOp(ck, L"Restarting as administrator ...", [wnd = ck->wnd, port = ck->port]() -> OpDone {
+                OpDone d;
+                d.title = "Restart as administrator";
+                wchar_t exe[MAX_PATH]{};
+                if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+                    d.ok = false;
+                    d.text = "GetModuleFileName failed";
+                    return d;
+                }
+                // 本窗口启动的模拟器会随本进程退出而死：先停掉，并让新实例自己再起一个（外部
+                // 启动的模拟器不动，新实例直接连它）。
+                const bool ours = uacstudio::TheSimulator().Owns();
+                if (ours) uacstudio::TheSimulator().Stop(port);
+                std::wstring args = L"--allow-host --port " + std::to_wstring(port);
+                if (ours) args += L" --start-simulator";
+                // ShellExecute 可能弹 UAC：在 worker 线程上做（规则 7：UI 线程不等）
+                const auto r = ShellExecuteW(nullptr, L"runas", exe, args.c_str(), nullptr,
+                                             SW_SHOWNORMAL);
+                d.ok = reinterpret_cast<INT_PTR>(r) > 32;
+                d.text = d.ok ? "relaunched elevated - closing this instance"
+                              : "relaunch failed (UAC declined?)";
+                if (d.ok) PostMessageW(wnd, WM_CLOSE, 0, 0); // 关闭请求在操作回报后被处理
+                return d;
+            });
+            return 0;
+        }
         for (int i = 0; i < kActionCount; ++i)
             if (id == kActionDefs[i].id) {
                 // A disabled button cannot be clicked, but the plan is checked again here: it is the rule, the button is a view
@@ -836,7 +876,12 @@ void ShowEnvCheck(HWND owner, std::uint16_t port) {
                                  nullptr);
     ck.done = CreateWindowExW(0, L"BUTTON", L"Done", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0,
                               10, 10, ck.wnd, reinterpret_cast<HMENU>(2), nullptr, nullptr);
-    for (HWND c : {ck.recheck, ck.done})
+    // 守卫拒绝时的出路：一键 UAC 重启为管理员（--allow-host 在新进程内打开 host 用例开关）。
+    ck.restart = CreateWindowExW(0, L"BUTTON", L"Restart as administrator", WS_CHILD | WS_VISIBLE |
+                                                                                      BS_OWNERDRAW,
+                                 0, 0, 10, 10, ck.wnd, reinterpret_cast<HMENU>(3), nullptr,
+                                 nullptr);
+    for (HWND c : {ck.recheck, ck.done, ck.restart})
         SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ck.fUi), TRUE);
     // The action buttons start disabled: what they may do is only known when the first check has reported back
     for (int i = 0; i < kActionCount; ++i) {
