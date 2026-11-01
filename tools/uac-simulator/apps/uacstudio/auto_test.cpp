@@ -736,7 +736,14 @@ void CaseHostCaptureTone(Ctx& c) {
     const auto hit = RunTool(fx.probeExe, "capture --freq 1000 --seconds 3 --endpoint " + fx.newCaptureId, 30000);
     c.Log("capture 1000 Hz -> exit " + std::to_string(hit.code) + ": " + Trim(hit.out));
     c.Expect(hit.started && !hit.timedOut, "host_probe capture did not finish: " + Trim(hit.out));
-    c.Expect(hit.code == 0, "1 kHz tone not detected on the simulated microphone (exit " + std::to_string(hit.code) + "): " + Trim(hit.out));
+    c.Expect(hit.code == 0,
+             "1 kHz tone not detected on the simulated microphone (exit " + std::to_string(hit.code) + "): " +
+                 Trim(hit.out) +
+                 " -- if samples > 0 but power is 0.000000, the Windows side zero-fills the capture "
+                 "(SILENT flag) while the simulator did deliver iso IN data: that signature is the "
+                 "usbip-win2/UDE isochronous-IN platform defect (see docs/runbook.md, 'iso IN'); "
+                 "verified byte-by-byte against the usbip-win2 client source on 0.9.8.0 and 0.9.8.1, "
+                 "UAC1 and UAC2");
     // 对照：同一路流里找 3 kHz 必须检不出——证明 Goertzel 判定不是恒真
     const auto miss = RunTool(fx.probeExe, "capture --freq 3000 --seconds 2 --endpoint " + fx.newCaptureId, 30000);
     c.Expect(miss.code == 1, "3 kHz was 'detected' in a 1 kHz stream (exit " + std::to_string(miss.code) + "): the detector is not discriminating");

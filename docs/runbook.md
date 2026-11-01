@@ -45,6 +45,26 @@ Sandbox 流程不变，见 [sandbox.md](./sandbox.md)：
 到达时刻+span"排程会以 K 倍速率出数（真机实测 6.09× 超采，usbaudio2 因只有 1 个在飞而测不出）。
 引擎现在把 URB 排进全局流槽位 `[max(now, 流末端), +span]`，K 个在飞也是墙钟速率。
 
+## iso IN 数据到达性问题（平台缺陷，2026-11-01 定案）
+
+**症状**：模拟麦克风的音频数据从未真正到达 Windows 采集端。`host_probe capture` 的 `samples` 计数
+**不可作为证据**——共享模式 WASAPI 对无数据流的图全部标 `SILENT` 并零填充计帧；唯一可信指标是
+`power`（Goertzel 能量），它从未 > 0（`host.capture_tone` 因此从未在任何机器通过过，属已知）。
+
+**证据链**（开发机 Win11 26200，逐项排除）：
+- 服务端 RET 字节逐字节对照 usbip-win2 客户端源码（wsk_receive_irp/wsk_receive/dev_ioctl），全部合规；
+- iso CMD 形状与扬声器（能工作的 OUT）完全同构（10 包 × 384B、interval 4、flags 2）；
+- Windows 每次 arm 一批（mic 7-9 个、反馈端点 8-16 个），服务端即时交付真实正弦数据（inBytes 可证），
+  之后静默停发、无 UNLINK；
+- 变量全部试过：驱动 0.9.8.0 / 0.9.8.1、UAC1(usbaudio.sys) / UAC2(usbaudio2.sys)、同步类型
+  async/adaptive/sync、满包/短包/零长包、立即/延迟完成、start_frame 三种纪元、RET 字节序两种顺序；
+- 上游 issue #200 的 0.9.8.0 可用结论**未能在本机复现**（0.9.8.0 同样 power=0）。
+
+**结论**：iso IN 的 URB 完成在 Udecx/ucx 内部被丢弃，属 usbip-win2 + 本 Windows 版本的平台级缺陷，
+服务端侧无解。`host.capture_tone`/`host.volume_event` 在此环境预期 FAIL（消息里带此诊断签名）；
+其余 18 个用例（含扬声器 OUT 全链路、驱动绑定、GUI 按钮路径）真机通过。若未来 usbip-win2 修复
+（关注 issue #200 及其后续），直接重跑 `--autotest --allow-host` 即可回归。
+
 ## 常见问题
 
 | 症状 | 处置 |
