@@ -8,7 +8,7 @@
 `usbip attach` 需要**管理员**；非一次性机器装驱动会先建**系统还原点**（别加 `-NoRestorePoint`）；退出码 3010 = 需重启。
 Sandbox 流程不变，见 [sandbox.md](./sandbox.md)：
 
-1. 从 github.com/vadimgrn/usbip-win2/releases 下载 x64 安装包到 `tools/uac-simulator/third_party/usbip-win2/`（BSD-2-Clause，随包分发需附 LICENSE；文档锁定并测试过 v0.9.7.8，实机也验证过 0.9.8.1，换版本前先在 Sandbox 里跑一遍用例表，结果按 `VERSION.txt` 里记录的版本归因）
+1. 从 github.com/vadimgrn/usbip-win2/releases 下载 x64 安装包到 `tools/uac-simulator/third_party/usbip-win2/`（BSD-2-Clause，随包分发需附 LICENSE；2026-11-01 起锁定 v0.9.8.1（真机 Win11 26200 全链路验证；0.9.8.0 实测行为一致），换版本前先在 Sandbox 里跑一遍用例表，结果按 `VERSION.txt` 里记录的版本归因）
 2. **手动拷贝（推荐）：** `build.bat` 构建成功后自动生成 `tools/uac-simulator/dist/uacsim-sandbox-release.zip` → 拷进 Sandbox → 解压 → 双击 `run.cmd`。自动装驱动、起 uacsimd、对 UAC2 / UAC1 各跑一遍用例表，结果在解压目录的 `results\`，拷回来即可
 3. **目录映射：** `powershell -File tools/uac-simulator/sandbox/launch-sandbox.ps1` 一条命令启动 Sandbox，结果回到 `sandbox/results/`
 

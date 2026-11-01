@@ -121,7 +121,7 @@ try {
             $installers | ForEach-Object { Copy-Item $_.FullName $drv }
             # 结果要能归因到具体驱动版本（驱动行为随版本变，如 usbip-win2 #200）：文件名 + 哈希写进 VERSION.txt
             $driverDesc = ($installers | ForEach-Object { '{0} (sha256 {1})' -f $_.Name, (Get-Sha256 $_.FullName) }) -join '; '
-            $pinned = '0.9.7.8'   # 项目文档（RFC / runbook）锁定并测试过的版本
+            $pinned = '0.9.8.1'   # 2026-11-01 起锁定：真机（Win11 26200）全链路验证过的版本；0.9.8.0 实测行为一致
             $installers | Where-Object { $_.Name -notmatch [regex]::Escape($pinned) } | ForEach-Object {
                 Write-Warning "安装包 $($_.Name) 不是项目文档锁定的 v$pinned：结果请按这个版本归因（VERSION.txt 已记录）；升级驱动前应先在 Sandbox 里跑一遍用例表。"
             }
