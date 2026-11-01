@@ -60,10 +60,19 @@ StatusView DescribeStatus(const std::string& statusBody) {
     if (j.contains("profile") && j.at("profile").is_string())
         for (const char c : j.at("profile").get<std::string>()) profile.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
     const int instances = j.value("instances", 0);
+    // 设备侧音量/静音也显示：Windows 混音器不跟 Status Word（usbip-win2/UDE 平台缺陷，
+    // host.volume_event 由此失败）时，Vol+/- 至少在界面上有可见反馈。
+    std::wstring vol;
+    if (j.contains("volCurDb") && j.contains("mute")) {
+        wchar_t buf[64]{};
+        swprintf(buf, 64, L" - vol %.1f dB%s", j.value("volCurDb", 0.0),
+                 j.value("mute", false) ? L" (muted)" : L"");
+        vol = buf;
+    }
     v.led = imported ? 2 : 1;
     v.text = std::wstring(imported ? L"Imported" : L"Listening") + (profile.empty() ? L"" : L": " + profile) +
              (imported ? L" - held by the virtual host controller" : L" - waiting for usbip attach") +
-             (instances > 1 ? L" (" + std::to_wstring(instances) + L" instances)" : L"");
+             (instances > 1 ? L" (" + std::to_wstring(instances) + L" instances)" : L"") + vol;
     return v;
 }
 

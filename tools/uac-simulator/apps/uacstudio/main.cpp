@@ -494,15 +494,6 @@ void ApplyStatus(bool reachable, const std::string& body) {
     UpdateStatusBar();
 }
 
-std::string g_lastLog; // UI thread only
-void ApplyLogText(const std::string& body) {
-    if (g_testRunning.load()) return; // the auto test output owns the log panel
-    if (body.size() < 3 || body.size() > 60000 || body == g_lastLog) return;
-    g_lastLog = body;
-    SetWindowTextW(g_logEdit.wnd, Widen(body).c_str());
-    SendMessageW(g_logEdit.wnd, EM_SETSEL, body.size() - 1, body.size() - 1);
-}
-
 void SetEnabled(bool on) { EnableWindow(g_main, on ? TRUE : FALSE); }
 
 // ---------------------------------------------------------------- background threads
@@ -531,10 +522,8 @@ void PollerMain(HWND h) {
     while (!g_stop.load()) {
         const std::string st = uacstudio::http_req(g_port, "GET", "/status", "");
         PostString(h, WM_APP_STATUS, st.empty() ? 0 : 1, st);
-        if (!st.empty() && !g_testRunning.load()) {
-            const std::string log = uacstudio::http_req(g_port, "GET", "/log?n=200", "");
-            if (!log.empty()) PostString(h, WM_APP_LOGTEXT, 0, log);
-        }
+        // 设备侧 NDJSON 日志不再灌进请求日志面板（原始流水请用 uacsimd --log-file）：
+        // 面板只留用户动作与结果，一行一条。
         WaitForSingleObject(g_pollWake, 500); // woken early by PokePoller()
     }
 }
@@ -558,7 +547,9 @@ void RequestMain(HWND h) {
             std::lock_guard lk(g_reqMtx);
             g_activeWhat.clear();
         }
-        PushLine(h, "[" + r.what + "] " + (ok ? out : "request failed - is uacsimd running?"));
+        std::string what = r.what;
+        while (what.size() < 20) what += ' '; // 动作列对齐
+        PushLine(h, "[" + what + "] " + (ok ? out : "request failed - is uacsimd running?"));
         // "Attached" 只代表 profile 装进了模拟器；设备进没进 Windows 是另一件事。别让成功字样
         // 掩盖这一步——直接告诉用户当前 Windows 侧的状态和下一步（都在本后台线程，不碰 UI 线程）。
         if (ok && r.path == "/attach" && out.find("\"attached\"") != std::string::npos) {
@@ -704,7 +695,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         DarkenEditFrame(g_capEdit.wnd);
         g_btnCapStart.create(h, ID_CAPSTART, L"BUTTON", L"Record", key, 0, cs->hInstance, g_fUi);
         g_btnCapStop.create(h, ID_CAPSTOP, L"BUTTON", L"Stop rec", key, 0, cs->hInstance, g_fUi);
-        g_lblLog.create(h, 905, L"STATIC", L"Request log (NDJSON, refreshed every 0.5 s)", vis, 0,
+        g_lblLog.create(h, 905, L"STATIC", L"Request log (user actions, one per line; device log: uacsimd --log-file)", vis, 0,
                         cs->hInstance, g_fUi);
         g_logEdit.create(h, ID_LOG, L"EDIT", nullptr,
                          // 不换行：EDIT 的自动换行让每次 SetWindowTextW 都做全文 ScriptItemize
@@ -745,11 +736,6 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_STATUS: {
         std::unique_ptr<std::string> body(reinterpret_cast<std::string*>(lp));
         ApplyStatus(wp == 1, body ? *body : std::string());
-        return 0;
-    }
-    case WM_APP_LOGTEXT: {
-        std::unique_ptr<std::string> body(reinterpret_cast<std::string*>(lp));
-        if (body) ApplyLogText(*body);
         return 0;
     }
     case WM_APP_SIMSTARTED:
