@@ -150,10 +150,11 @@ TEST_CASE("gap3: UAC2 clock SET_CUR re-times the IN engine") {
     const u8 setup[8] = {0x21, 0x01, 0x00, 0x01, 0x00, 0x04, 4, 0}; // wValue: CN=0 CS=1; wIndex: iface=0 entity=4
     std::copy(setup, setup + 8, cs.setup);
     c.submit = cs;
-    std::vector<u8> out{0x00, 0x77, 0x01, 0x00}; // 96000 = 0x00017700 LE
+    std::vector<u8> out{0x44, 0xAC, 0x00, 0x00}; // 44100 = 0x0000AC44 LE（默认 rates 内的档位；
+    // 范围外值现在会被 STALL——见 ac_processor 的 SET_CUR 校验）
     m.on_urb(c, out, {}, [](Completion&&) {});
-    CHECK(m.ac_state().sampleRate == 96000);
-    // mic IN packet at 96 kHz stereo 4B slot: 96 samples/ms -> 768 B
+    CHECK(m.ac_state().sampleRate == 44100);
+    // mic IN packet at 44.1 kHz stereo 4B slot: 44 samples/ms -> 352 B
     c = usbip::UrbCommand{};
     c.is_submit = true;
     c.basic.command = usbip::CMD_SUBMIT;
@@ -166,5 +167,5 @@ TEST_CASE("gap3: UAC2 clock SET_CUR re-times the IN engine") {
     auto* mc = dynamic_cast<ManualClock*>(&m.clock());
     mc->advance_to(1000);
     m.pump();
-    CHECK(payload.size() == 768); // engine re-timed to 96 kHz
+    CHECK(payload.size() == 352); // engine re-timed to 44.1 kHz（首包 44 样本）
 }

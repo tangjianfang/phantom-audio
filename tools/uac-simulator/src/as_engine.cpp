@@ -97,7 +97,22 @@ AsEngine::Stats AsEngine::stats() const {
 
 std::vector<unsigned char> AsEngine::fill_packets(std::uint16_t nPackets,
                                                   std::vector<usbip::IsoPacket>& isoOut) {
-    // Fractional-sample pacing: 44100 Hz is 44.1 samples/ms; integer division
+    // 速率控制（2026-11-01 真机定案）：iso IN 的 RET_SUBMIT 不能延迟（客户端 +1ms 即弃管管道），
+    // 因此速率不靠延迟完成，而靠**内容记账**：允许交付的帧数 = 自流开始的墙钟时间 × 采样率
+    // （+ 少量预支），额度耗尽的包发零长度——真设备无数据帧的合法形态，主机按静音/丢帧处理。
+    // 平均速率严格等于墙钟（音调不变、无超采），初始突发的前几个包为空，随后转为实包。
+    const std::uint64_t now = clock_.now_us();
+    if (now - lastTxActivityUs_ > 1000000) { // 空闲后重开一条流（不补偿离线时段）
+        txStartUs_ = now;
+        txFrames_ = 0;
+    }
+    lastTxActivityUs_ = now;
+    const std::uint64_t allowedFrames =
+        (now - txStartUs_) * cfg_.rate / 1000000 + cfg_.rate / 500; // +2ms 预支防饿死
+    std::int64_t budget = static_cast<std::int64_t>(allowedFrames) -
+                          static_cast<std::int64_t>(txFrames_);
+
+    // Fractional-sample sizing: 44100 Hz is 44.1 samples/ms; integer division
     // alone would stream at 44000 and drift against the host. A micro-
     // accumulator carries the remainder across packets.
     const std::uint64_t intervalUs = cfg_.packetIntervalUs;
@@ -116,28 +131,35 @@ std::vector<unsigned char> AsEngine::fill_packets(std::uint16_t nPackets,
         if (p & 1) slots += static_cast<std::uint64_t>(cfg_.slotDrift); // fault inj.
         const std::size_t nSamples = slots * cfg_.channels;
         const std::size_t bytes = nSamples * bytesPerSample;
-        for (std::size_t sm = 0; sm < nSamples; ++sm) {
-            double v = 0.0;
-            if (src_ == Src::Sine) {
-                v = std::sin(phase_) * sineAmp_;
-                phase_ += 2.0 * 3.14159265358979323846 * sineHz_ / cfg_.rate;
-                if (phase_ > 2.0 * 3.14159265358979323846)
-                    phase_ -= 2.0 * 3.14159265358979323846;
-            } else if (src_ == Src::File) {
-                if (filePos_ < fileBuf_.size()) v = fileBuf_[filePos_++] / 32768.0;
-            }
-            const auto q = static_cast<std::int32_t>(std::lround(v * 2147483647.0)) >>
-                           (8 * (4 - cfg_.bytesPerSample));
-            for (std::uint8_t by = 0; by < cfg_.bytesPerSample; ++by)
-                out.push_back(static_cast<unsigned char>((q >> (8 * by)) & 0xff));
-        }
         usbip::IsoPacket ip;
         ip.offset = offset;
-        ip.length = static_cast<std::uint32_t>(bytes);        // matches payload
-        ip.actual_length = static_cast<std::uint32_t>(bytes);
+        if (budget < static_cast<std::int64_t>(slots)) { // 墙钟额度不足：零长度帧（合法形态）
+            ip.length = 0;
+            ip.actual_length = 0;
+        } else {
+            budget -= static_cast<std::int64_t>(slots);
+            txFrames_ += slots;
+            for (std::size_t sm = 0; sm < nSamples; ++sm) {
+                double v = 0.0;
+                if (src_ == Src::Sine) {
+                    v = std::sin(phase_) * sineAmp_;
+                    phase_ += 2.0 * 3.14159265358979323846 * sineHz_ / cfg_.rate;
+                    if (phase_ > 2.0 * 3.14159265358979323846)
+                        phase_ -= 2.0 * 3.14159265358979323846;
+                } else if (src_ == Src::File) {
+                    if (filePos_ < fileBuf_.size()) v = fileBuf_[filePos_++] / 32768.0;
+                }
+                const auto q = static_cast<std::int32_t>(std::lround(v * 2147483647.0)) >>
+                               (8 * (4 - cfg_.bytesPerSample));
+                for (std::uint8_t by = 0; by < cfg_.bytesPerSample; ++by)
+                    out.push_back(static_cast<unsigned char>((q >> (8 * by)) & 0xff));
+            }
+            ip.length = static_cast<std::uint32_t>(bytes);        // matches payload
+            ip.actual_length = static_cast<std::uint32_t>(bytes);
+        }
         ip.status = 0;
         isoOut.push_back(ip);
-        offset += static_cast<std::uint32_t>(bytes);
+        offset += ip.length;
     }
     fracCarry_ = carry;
     return out;
@@ -149,13 +171,10 @@ void AsEngine::on_iso_in(const usbip::UrbCommand& cmd, CompletionFn complete) {
     pi.seqnum = cmd.basic.seqnum;
     pi.nPackets = static_cast<std::uint16_t>(
         std::min<std::uint64_t>(cmd.submit.number_of_packets, 0xffff));
-    // 全局流时间线：URB 占据流槽位 [S, S+span)，在 S+span 完成，S = max(now, 流末端)。
-    // （按"到达+span"排程时，K 个在飞 URB = K 倍吞吐；usbaudio.sys 的 UAC1 管道实测 6.09×超采。
-    // 空闲后 S 从 now 重新起算，不做突发补偿。）
-    const std::uint64_t spanUs =
-        static_cast<std::uint64_t>(pi.nPackets) * cfg_.packetIntervalUs;
-    pi.deadlineUs = std::max(clock_.now_us(), nextTxUs_) + spanUs;
-    nextTxUs_ = pi.deadlineUs;
+    pi.startFrame = cmd.submit.start_frame;
+    // iso IN 的 RET_SUBMIT 必须即时（真机实测：+1ms 固定延迟即被客户端弃管，扬声器 0x06 的
+    // 立即完成路径从未出问题）。速率控制在 fill_packets 里按墙钟做"内容记账"（见其注释）。
+    pi.deadlineUs = clock_.now_us();
     pi.complete = std::move(complete);
     ++stats_.inRequests;
     pending_.push_back(std::move(pi));
@@ -220,7 +239,12 @@ void AsEngine::pump() {
         cm.ret.status = 0;
         cm.ret.actual_length = static_cast<std::uint32_t>(data.size());
         cm.ret.number_of_packets = p.nPackets;
-        cm.ret.start_frame = 0; // #200 纪元问题：先归零，M0 实测后调整
+        // ret.start_frame 的纪元必须是"开机毫秒数"（usbip-win2 0.9.8.1 的 ude_filter 把
+        // QueryBusTime 改成了 KeQueryInterruptTime/10000=ms-since-boot，issue #200）：
+        // usbaudio 用 QueryBusTime − URB.StartFrame 计算流位置，而客户端把我们的 start_frame
+        // 原样写进 URB.StartFrame。曾恒回 0/流内递增 → 位置差=整机运行时长 → 采集 0 秒。
+        // GetTickCount64 与 KeQueryInterruptTime 同为开机毫秒纪元。
+        cm.ret.start_frame = static_cast<std::int32_t>(GetTickCount64());
         cm.ret.error_count = 0;
         cm.payload = std::move(data);
         cm.iso = std::move(iso);

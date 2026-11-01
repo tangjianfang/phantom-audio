@@ -103,7 +103,35 @@ struct UsbIpServer::Impl {
             uac::wr_be<uint32_t>(wire.data() + 32, cm.ret.number_of_packets);
             uac::wr_be<uint32_t>(wire.data() + 36, cm.ret.error_count);
             auto iso = encode_iso_descs(cm.iso);
+            // RET_SUBMIT 的字节序：header → 数据 → iso 描述符（usbip-win2 客户端 wsk_receive_irp.cpp
+            // make_mdl_chain：iso IN 的 MDL 链 = transfer_buffer 后接 iso 描述符）。
             send_on(*c, wire, cm.payload, iso);
+            { // 诊断：首个 iso IN RET 的线上字节（定位 usbip-win2 客户端弃管 iso IN 的原因）
+                static std::atomic<int> dumped{0};
+                if (cm.ret.number_of_packets > 0 && !cm.payload.empty() && dumped < 2) {
+                    ++dumped;
+                    std::string hex = "RET hex: hdr=";
+                    static constexpr char kH[] = "0123456789abcdef";
+                    for (std::size_t i = 20; i < 48 && i < wire.size(); ++i) {
+                        hex += kH[wire[i] >> 4];
+                        hex += kH[wire[i] & 0xf];
+                    }
+                    hex += " payload[0..31]=";
+                    for (std::size_t i = 0; i < 32 && i < cm.payload.size(); ++i) {
+                        hex += kH[cm.payload[i] >> 4];
+                        hex += kH[cm.payload[i] & 0xf];
+                    }
+                    hex += " iso[0]=";
+                    for (std::size_t i = 0; i < 16 && i < iso.size(); ++i) {
+                        hex += kH[iso[i] >> 4];
+                        hex += kH[iso[i] & 0xf];
+                    }
+                    if (FILE* f = [] { FILE* fp = nullptr; fopen_s(&fp, "uac-ret-diag.txt", "a"); return fp; }()) {
+                        std::fprintf(f, "%s\n", hex.c_str());
+                        std::fclose(f);
+                    }
+                }
+            }
             cb = {};
         };
     }
@@ -239,6 +267,30 @@ struct UsbIpServer::Impl {
                     iso_raw.assign(n, 0);
                     if (!recv_all(c.s, iso_raw.data(), n)) break;
                     iso = decode_iso_descs(iso_raw);
+                    { // 诊断：前 12 个 iso CMD 的形状 + mic(ep6 IN) 前 10 条单独记录
+                        static std::atomic<int> dumped{0};
+                        static std::atomic<int> micDumped{0};
+                        const bool isMic = cmd->basic.direction != 0 && cmd->basic.ep == 6;
+                        if (dumped < 12 || (isMic && micDumped < 10)) {
+                            ++dumped;
+                            if (isMic) ++micDumped;
+                            char line[256];
+                            std::snprintf(line, sizeof(line),
+                                          "CMD iso: ep=%u dir=%s nPackets=%u bufLen=%u startFrame=%d "
+                                          "interval=%d flags=%x iso0={off=%u,len=%u}\n",
+                                          cmd->basic.ep, cmd->basic.direction ? "IN" : "OUT",
+                                          cmd->submit.number_of_packets,
+                                          cmd->submit.transfer_buffer_length,
+                                          cmd->submit.start_frame, cmd->submit.interval,
+                                          cmd->submit.transfer_flags,
+                                          iso.empty() ? 0u : iso.front().offset,
+                                          iso.empty() ? 0u : iso.front().length);
+                            if (FILE* f = [] { FILE* fp = nullptr; fopen_s(&fp, "uac-ret-diag.txt", "a"); return fp; }()) {
+                                std::fputs(line, f);
+                                std::fclose(f);
+                            }
+                        }
+                    }
                 }
                 c.disp->on_urb(*cmd, payload, iso,
                                wrap_completion(connPtr, cmd->basic.seqnum, CompletionFn{}));

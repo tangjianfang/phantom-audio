@@ -61,55 +61,59 @@ TEST_CASE("sine packer: 10 packets of 192 bytes, waveform approximates 1kHz") {
     CHECK(std::abs(s48) <= 40);
 }
 
-TEST_CASE("pacing: completion strictly at deadline, never early, exactly once") {
+// iso IN 完成语义（2026-11-01 真机定案）：RET_SUBMIT 必须**立即**完成——usbip-win2 客户端
+// 对延迟的 iso IN 完成会弃管管道（固定 +1ms 即死；扬声器 0x06 的立即完成路径从未出问题）。
+// 速率控制改为**内容记账**（见下个用例）。本用例锁定"立即完成 + 幂等"。
+TEST_CASE("iso IN: completion is immediate (never deferred) and idempotent") {
     ManualClock clock;
     LogStore log;
     AsEngine eng(clock, log, StreamConfig{});
     eng.on_iso_in(make_iso_in(7, 10), capture_completion());
     g_completed = 0;
-    clock.advance_to(9999);
-    eng.pump();
-    CHECK(g_completed == 0); // 未到期
-    clock.advance_to(10000);
-    eng.pump();
-    CHECK(g_completed == 1); // 恰好到期
+    eng.pump(); // 不推时间：立即完成
+    CHECK(g_completed == 1);
     eng.pump();
     CHECK(g_completed == 1); // 幂等：不重复
     CHECK(eng.stats().inRequests == 1);
-    CHECK(eng.stats().inBytes == 10 * 192);
+    CHECK(eng.stats().inBytes <= 10 * 192); // 受墙钟额度限制（新流 +2ms 预支 ≈ 2 包）
+    CHECK(g_last.iso.size() == 10);
 }
 
-// 全局流时间线：K 个在飞 URB 也不能按 K 倍速率出数。usbaudio.sys(UAC1) 实测同时压
-// ~6 个 iso IN URB；按"到达时刻+nPackets×间隔"排程时每个 URB 各自 1ms 后就完成，
-// 吞吐 = K 倍（真机 4 秒采到 6.09× 样本）。修复后 deadline 走全局 nextTx 时间线：
-// 无论在飞多少，每 1ms 只完成一个（1 包/URB 时）。
-TEST_CASE("pacing: K in-flight URBs complete at wall-clock rate, not K x") {
+// 内容记账：K 个在飞 URB 全部立即完成，但**载荷字节**遵守墙钟额度——额度外的包为零长度帧。
+// （此前按"到达+span"延迟排程：usbaudio.sys(UAC1) 压 ~6 个在飞 URB 时吞吐 K 倍，真机 6.09×
+// 超采；而延迟完成又会被 usbip-win2 客户端弃管。零长度帧是真设备"本帧无数据"的合法形态。）
+TEST_CASE("iso IN: K in-flight URBs all complete now; DATA obeys the wall-clock budget") {
     ManualClock clock;
     LogStore log;
     AsEngine eng(clock, log, StreamConfig{});
     constexpr int kInFlight = 6;
     for (uint32_t i = 1; i <= kInFlight; ++i)
         eng.on_iso_in(make_iso_in(i, 1), capture_completion());
-    for (int ms = 1; ms <= kInFlight; ++ms) {
-        g_completed = 0;
-        clock.advance_to(static_cast<std::uint64_t>(ms) * 1000);
-        eng.pump();
-        CHECK_MESSAGE(g_completed == 1,
-                      "at t=" << ms << "ms exactly one URB must complete, got " << g_completed);
-    }
-    CHECK(eng.stats().inBytes == static_cast<std::uint64_t>(kInFlight) * 192);
+    g_completed = 0;
+    eng.pump(); // t=0：全部完成
+    REQUIRE(g_completed == kInFlight);
+    // t=0 的额度 = 2ms 预支 = 96 帧 = 2 个满包（48 帧/包 @48k/1ms）；其余为零长度
+    int full = 0, empty = 0;
+    // g_last 只留最后一个：改用统计断言——首包数据有、且 inBytes 不超过额度
+    CHECK(eng.stats().inBytes == 2 * 192);
+    CHECK(g_last.iso[0].actual_length == 0); // 最后一个 URB 在额度之外 → 零长度
+    clock.advance_to(5000);
+    eng.on_iso_in(make_iso_in(99, 1), capture_completion());
+    g_completed = 0;
+    eng.pump();
+    REQUIRE(g_completed == 1);
+    CHECK(g_last.iso[0].actual_length == 192); // 墙钟已过去 5ms，额度充足 → 满包
+    CHECK(eng.stats().inBytes == 3 * 192);
+    (void)full;
+    (void)empty;
 }
 
-TEST_CASE("deadline scales with packet count") {
+TEST_CASE("completion carries the requested packet count") {
     ManualClock clock;
     LogStore log;
     AsEngine eng(clock, log, StreamConfig{});
-    eng.on_iso_in(make_iso_in(1, 4), capture_completion()); // 4ms
+    eng.on_iso_in(make_iso_in(1, 4), capture_completion());
     g_completed = 0;
-    clock.advance_to(3999);
-    eng.pump();
-    CHECK(g_completed == 0);
-    clock.advance_to(4000);
     eng.pump();
     CHECK(g_completed == 1);
     CHECK(g_last.iso.size() == 4);

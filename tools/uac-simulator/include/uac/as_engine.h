@@ -69,6 +69,7 @@ private:
         std::uint32_t seqnum;
         std::uint16_t nPackets;
         std::uint64_t deadlineUs;
+        std::int32_t startFrame; // 主机在 CMD_SUBMIT 里安排的起始帧；完成时原样回显
         CompletionFn complete;
     };
     std::vector<unsigned char> fill_packets(std::uint16_t nPackets,
@@ -80,10 +81,11 @@ private:
     std::condition_variable cv_;
     StreamConfig cfg_;
     std::deque<PendingIn> pending_;
-    // 全局流时间线（µs）：已排队流槽位的末端。pacing 必须按流时间线而不是每个 URB 的
-    // 到达时刻——usbaudio.sys(UAC1) 会同时压 ~6 个在飞 URB，按到达排程会以 K 倍速率出数
-    // （真机实测 6.09×超采）。max(now, 流末端) 保证空闲后不突发补偿。
-    std::uint64_t nextTxUs_ = 0;
+    // 内容记账（iso IN 速率控制，2026-11-01 真机定案）：RET 必须即时（延迟 1ms 客户端即弃管），
+    // 速率靠"允许帧数 = 墙钟 × rate + 2ms 预支"控制，额度不足的包发零长度帧。
+    std::uint64_t txStartUs_ = 0;
+    std::uint64_t txFrames_ = 0;
+    std::uint64_t lastTxActivityUs_ = 0;
 
     // 源状态
     enum class Src { Silence, Sine, File } src_ = Src::Silence;

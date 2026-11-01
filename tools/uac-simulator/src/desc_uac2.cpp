@@ -172,7 +172,7 @@ std::vector<std::uint8_t> build_config_desc(const Uac2Profile& p) {
         if (p.feedbackEp)
             b.endpoint(0x84, 0x11 /*iso + usage feedback*/, 4, 4); // 反馈端点：只有标准描述符，没有 CS 端点描述符
     }
-    // AS 采集（异步 IN）
+    // AS 采集（iso async IN，时钟源为基准；同步类型 0x09/0x0D 真机实验均无差异）
     if (mic) {
         b.interface_(kInterfaceMic, 0, 0, 0x01, 0x02, 0x20);
         b.interface_(kInterfaceMic, 1, 1, 0x01, 0x02, 0x20);

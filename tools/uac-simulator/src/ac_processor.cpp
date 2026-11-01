@@ -167,10 +167,16 @@ ControlResult AcProcessor::on_control(std::uint8_t bmRequestType, std::uint8_t b
             if (isClock && cs == 0x01) { // CS_SAM_FREQ_CONTROL
                 if (isCur && (bmRequestType & 0x80) == 0) { // SET CUR（OUT 数据 4B LE）
                     if (outData.size() < 4) return true;
-                    st_.sampleRate = static_cast<std::uint32_t>(outData[0]) |
-                                     (static_cast<std::uint32_t>(outData[1]) << 8) |
-                                     (static_cast<std::uint32_t>(outData[2]) << 16) |
-                                     (static_cast<std::uint32_t>(outData[3]) << 24);
+                    const auto v = static_cast<std::uint32_t>(outData[0]) |
+                                   (static_cast<std::uint32_t>(outData[1]) << 8) |
+                                   (static_cast<std::uint32_t>(outData[2]) << 16) |
+                                   (static_cast<std::uint32_t>(outData[3]) << 24);
+                    // 范围外一律 STALL（ADC-2：主机只能设宣告过的档位）。真机教训（2026-11-01）：
+                    // Windows 的"默认格式"组件会把设备时钟设成 44100——即便协商流是 48000——
+                    // 曾被无条件接受，引擎按 44.1k 出 352/360B 短包，与 384B(wMaxPacketSize@48k)
+                    // 的协商格式不符，usbaudio2 拒收短包直接弃管 iso IN 管道（采集零样本）。
+                    if (std::find(rates_.begin(), rates_.end(), v) == rates_.end()) return true;
+                    st_.sampleRate = v;
                     res.kind = ControlResult::Kind::Ok;
                     return false;
                 }
